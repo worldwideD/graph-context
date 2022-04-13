@@ -249,7 +249,7 @@ class GraphAttentionLayer(nn.Module):
         self.W = nn.Parameter(torch.zeros(size=(in_features, out_features, )))
         nn.init.xavier_uniform_(self.W.data, gain=1.414)
         #self.a = nn.Parameter(torch.zeros(size=(2*out_features, 1))).to("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.a = nn.Parameter(torch.zeros(size=(2*out_features, 1)))
+        self.a = nn.Parameter(torch.zeros(size=(3*out_features, 1)))
 
         nn.init.xavier_uniform_(self.a.data, gain=1.414)
         self.leakyrelu = nn.LeakyReLU(self.alpha)
