@@ -260,7 +260,7 @@ class MultilayersGAT(nn.Module):
         self.dropout = dropout
         self.nlayers = nlayers
         
-        self.GATlayers = nn.ModuleList([GAT(in_feat if _ == 0 else nhid * nheads, out_feat if _ == nlayers-1 else nhid, e_feat, dropout=dropout, alpha=alpha, nheads=nheads, islast=(_ == nlayers-1)) for _ in range(nlayers)])
+        self.GATlayers = nn.ModuleList([GAT(in_feat if _ == 0 else 2 * nhid * nheads, out_feat if _ == nlayers-1 else nhid, e_feat, dropout=dropout, alpha=alpha, nheads=nheads, islast=(_ == nlayers-1)) for _ in range(nlayers)])
 
     def forward(self, x, adj, e):
         for GATlayer in self.GATlayers:
@@ -274,6 +274,8 @@ class GAT(nn.Module):
         self.islast = islast
         self.nheads = nheads
         self.out_features = out_features
+        if (self.islast == True):
+            self.W = nn.Linear(2*out_features, out_features)
 
         self.attns = nn.ModuleList([GraphAttentionLayer(in_features, out_features, e_features, dropout=dropout, alpha=alpha, concat=not islast) for _ in range(nheads)])
         #self.attns = [GraphAttentionLayer(in_features, out_features, dropout=dropout, alpha=alpha, concat=not islast) for _ in range(nheads)]
@@ -286,8 +288,8 @@ class GAT(nn.Module):
         x = F.dropout(x, self.dropout, training=self.training)
         if (self.islast == True):
             N = x.size()[0]
-            x = x.view(N, self.nheads, self.out_features).mean(1)
-            x = F.elu(x)
+            x = x.view(N, self.nheads, 2 * self.out_features).mean(1)
+            x = F.elu(self.W(x))
         return x
 
 class GraphAttentionLayer(nn.Module):
@@ -300,8 +302,8 @@ class GraphAttentionLayer(nn.Module):
         self.alpha = alpha
         self.concat = concat
 
-        self.W_e = nn.Parameter(torch.zeros(size=(e_features, in_features, )))
-        nn.init.xavier_uniform_(self.W_e.data, gain=1.414)
+        self.W_e = nn.Linear(e_features, in_features)
+        #nn.init.xavier_uniform_(self.W_e.data, gain=1.414)
         self.W = nn.Parameter(torch.zeros(size=(in_features, out_features, )))
         nn.init.xavier_uniform_(self.W.data, gain=1.414)
         self.a = nn.Parameter(torch.zeros(size=(3*out_features, 1)))
@@ -310,19 +312,26 @@ class GraphAttentionLayer(nn.Module):
         self.leakyrelu = nn.LeakyReLU(self.alpha)
     
     def forward(self, input, adj, e_feat):
-        e = torch.matmul(torch.matmul(e_feat, self.W_e), self.W)
+        e_input = self.W_e(e_feat)
+        #torch.matmul(e_feat, self.W_e)
+        e = torch.matmul(e_input, self.W)
         h = torch.mm(input, self.W)
+        #N = input.size()[0]
+        #h = torch.cat([torch.mm(input, self.W), torch.matmul(e_input, self.W).view(N * N, -1)], dim=1)
         N = h.size()[0]
 
-        a_input = torch.cat([h.repeat(1, N).view(N * N, -1), h.repeat(N, 1), e.view(N * N, -1)], dim=1).view(N, -1, 3 * self.out_features)
+        h_input = torch.cat([h.repeat(N, 1), e.view(N * N, -1)], dim=1)
+        a_input = torch.cat([h.repeat(1, N).view(N * N, -1), h_input], dim=1).view(N, -1, 3 * self.out_features)
         e = self.leakyrelu(torch.matmul(a_input, self.a).squeeze(2))
 
         zero_vec = -9e15*torch.ones_like(e)
         
         att = torch.where(adj > 0, e, zero_vec)
-        att = F.softmax(att, dim=1)
+        att = F.softmax(att, dim=1).unsqueeze(1)
         att = F.dropout(att, self.dropout, training=self.training)
-        h_prime = torch.matmul(att, h)
+        h_input = h_input.view(N, N, -1)
+        #h_prime = torch.matmul(att, h)
+        h_prime = torch.stack([torch.matmul(att[i], h_input[i]) for i in range(N)], dim=0).squeeze(1)
 
         if self.concat:
             return F.elu(h_prime)

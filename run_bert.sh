@@ -14,4 +14,4 @@ python train.py --data_dir ./dataset/docred \
 --num_train_epochs 30.0 \
 --seed 66 \
 --num_class 97 \
---save_path GAT_ver1_net_params.pkl
+--save_path GAT_ver2_net_params.pkl
