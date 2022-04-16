@@ -3,6 +3,7 @@ import os
 
 import numpy as np
 import torch
+import torch.nn as nn
 from apex import amp
 import ujson as json
 from torch.utils.data import DataLoader
@@ -69,15 +70,15 @@ def train(args, model, train_features, dev_features, test_features):
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
 
-    print(model.named_parameters)
-    '''
+    #print(model.named_parameters)
+    
     model, optimizer = amp.initialize(model, optimizer, opt_level="O1", verbosity=0)
+    #model = nn.DataParallel(model, device_ids=[0, 1])
     num_steps = 0
     set_seed(args)
     model.zero_grad()
     finetune(train_features, optimizer, args.num_train_epochs, num_steps)
 
-'''
 def evaluate(args, model, features, tag="dev"):
 
     dataloader = DataLoader(features, batch_size=args.test_batch_size, shuffle=False, collate_fn=collate_fn, drop_last=False)
@@ -181,7 +182,7 @@ def main():
     args = parser.parse_args()
     wandb.init(project="graph+context")
     
-    os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     args.n_gpu = torch.cuda.device_count()

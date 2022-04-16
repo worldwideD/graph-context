@@ -21,8 +21,7 @@ class DocREModel(nn.Module):
         self.block_size = block_size
         self.num_labels = num_labels
 
-        self.GAT = MultilayersGAT(in_feat=config.hidden_size, nlayers=3, out_feat=config.hidden_size, nhid=128, dropout=0.0, alpha=0.2, nheads=8)
-        #self.GAT = self.GAT.to("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.GAT = MultilayersGAT(in_feat=config.hidden_size, nlayers=2, out_feat=config.hidden_size, e_feat=config.hidden_size, nhid=64, dropout=0.0, alpha=0.2, nheads=12)
 
     def encode(self, input_ids, attention_mask):
         config = self.config
@@ -37,65 +36,100 @@ class DocREModel(nn.Module):
     
     def get_graph(self, sequence_output, attention, entity_pos):
         offset = 1 if self.config.transformer_type in ["bert", "roberta"] else 0
-        m_cnt, e_cnt, m_node, e_node= 0, 0, [], []
+        m_cnt, e_cnt, d_cnt, m_node, m_sum = 0, 0, len(entity_pos), [], []
         n, h, _, c = attention.size()
-        for i in range(len(entity_pos)):
+        # get mention info  
+        for i in range(d_cnt):
+            sum = 0
             for e in entity_pos[i]:
                 if len(e) > 1:
-                    e_emb = []
                     for start, end, sent_id in e:
                         if start + offset < c:
                             # In case the entity mention is truncated due to limited max seq length.
                             m_emb = sequence_output[i, start + offset]
-                            e_emb.append(m_emb)
-                            m_node.append({'emb': m_emb, 'sent': sent_id, 'entity': e_cnt, 'doc': i})
+                            m_att = attention[i, :, start + offset]
+                            m_node.append({'emb': m_emb, 'att': m_att, 'id': m_cnt, 'sent': sent_id, 'entity': e_cnt, 'doc': i})
                             m_cnt += 1
-                    if len(e_emb) > 0:
-                        e_emb = torch.logsumexp(torch.stack(e_emb, dim=0), dim=0)
-                    else:
-                        e_emb = torch.zeros(self.config.hidden_size).to(sequence_output)
+                            sum += 1
                 else:
                     start, end, sent_id = e[0]
                     if start + offset < c:
                         m_emb = sequence_output[i, start + offset]
-                        e_emb = m_emb
-                        m_node.append({'emb': m_emb, 'sent': sent_id, 'entity': e_cnt, 'doc': i})
+                        m_att = attention[i, :, start + offset]
+                        m_node.append({'emb': m_emb, 'att': m_att, 'id': m_cnt, 'sent': sent_id, 'entity': e_cnt, 'doc': i})
                         m_cnt += 1
-                    else:
-                        e_emb = torch.zeros(self.config.hidden_size).to(sequence_output)
-                e_node.append({'emb': e_emb, 'd_id':i, 'e_id':e_cnt })
+                        sum += 1
                 e_cnt += 1
+            m_sum.append(sum)
         
-        adj = []
-        g_features = []
+        #  build adj matrix and edge id
+        adj, node_features, node_att, edge_id = [], [], [], []
         for m in m_node:
-            g_features.append(m["emb"])
+            node_features.append(m["emb"])
+            node_att.append(m["att"])
             _adj = []
 
             for _m in m_node:
                 _adj.append(int(m["entity"] == _m["entity"] or (m["doc"] == _m["doc"] and m["sent"] == _m["sent"])))
-            for e in e_node:
-                _adj.append(int(m["entity"] == e["e_id"]))
+                edge_id.append([m["id"], _m["id"]])
             
+            for j in range(d_cnt):
+                _adj.append(int(m["doc"] == j))
+                edge_id.append([m["id"], m_cnt+j])
+
             adj.append(_adj)
         
-        for e in e_node:
-            g_features.append(e["emb"])
-            _adj = []
+        for i in range(d_cnt):
+            feature, _adj = [], []
             
             for m in m_node:
-                _adj.append(int(m["entity"] == e["e_id"]))
-            '''
-            for _e in e_node:
-                _adj.append(int(_e["d_id"] == e["d_id"]))
-            '''
-            for _e in e_node:
-                _adj.append(int(_e["e_id"] == e["e_id"]))
+                _adj.append(int(m["doc"] == i))
+                edge_id.append([m_cnt+i, m["id"]])
+            for j in range(d_cnt):
+                _adj.append(int(i == j))
+                edge_id.append([m_cnt+i, m_cnt+j])
+            for j in range(c):
+                feature.append(sequence_output[i, j])
+            
             adj.append(_adj)
-        adj_ = torch.tensor(adj).to(sequence_output.device)
-        g_features_ = torch.stack(g_features, dim=0)
+            node_features.append(torch.logsumexp(torch.stack(feature, dim=0), dim=0))
+            att = torch.ones(h, c).to(attention)
+            node_att.append(att)
+        
+        # calculate attention
+        node_att = torch.stack(node_att, dim=0)
+        edge_id = torch.LongTensor(edge_id).to(sequence_output.device)
+        h_att = torch.index_select(node_att, 0, edge_id[:, 0])
+        t_att = torch.index_select(node_att, 0, edge_id[:, 1])
+        ht_att = (h_att * t_att).mean(1)
+        ht_att = ht_att / (ht_att.sum(1, keepdim=True) + 1e-5)
 
-        return adj_, g_features_, m_cnt, e_cnt
+        n_node = m_cnt+d_cnt
+        e_features = []
+        ht_att = ht_att.view(n_node, n_node, c)
+        off = 0
+        for i in range(d_cnt):
+            att = []
+            for p in range(m_sum[i]+1):
+                for q in range(m_sum[i]+1):
+                    att.append(ht_att[p][q])
+            att = torch.stack(att, dim=0)
+            ctx = contract("ld,rl->rd", sequence_output[i], att)
+            ctx = ctx.view(m_sum[i]+1, m_sum[i]+1, self.config.hidden_size)
+            for p in range(m_sum[i]+1):
+                for q in range(n_node):
+                    if q >= off and q < off+m_sum[i]+1:
+                        e_features.append(ctx[p, q-off])
+                    else:
+                        feat = torch.zeros(self.config.hidden_size).to(sequence_output.device)
+                        e_features.append(feat)
+            off += m_sum[i]+1
+        
+        # return
+        adj_ = torch.tensor(adj).to(sequence_output.device)
+        node_features_ = torch.stack(node_features, dim=0)
+        e_features_ = torch.stack(e_features, dim=0).view(n_node, n_node, self.config.hidden_size)
+        return adj_, node_features_, m_cnt, e_features_
 
     def get_hrt(self, sequence_output, attention, entity_pos, hts):
         offset = 1 if self.config.transformer_type in ["bert", "roberta"] else 0
@@ -148,13 +182,33 @@ class DocREModel(nn.Module):
         rss = torch.cat(rss, dim=0)
         return hss, rss, tss
     
-    def get_new_ht(self, sequence_output, g_features, m_cnt, e_cnt, entity_pos, hts):
+    def get_new_ht(self, sequence_output, attention, g_features, m_cnt, entity_pos, hts):
+        offset = 1 if self.config.transformer_type in ["bert", "roberta"] else 0
+        n, h, _, c = attention.size()
         hss, tss = [], []
-        g_features = g_features[m_cnt:]
         for i in range(len(entity_pos)):
-            cnt = len(entity_pos[i])
-            entity_embs = g_features[:cnt]
-            g_features = g_features[cnt:]
+            entity_embs = []
+            for e in entity_pos[i]:
+                if len(e) > 1:
+                    e_emb = []
+                    for start, end, sent_id in e:
+                        if start + offset < c:
+                            e_emb.append(g_features[0])
+                            g_features = g_features[1:]
+                    if len(e_emb) > 0:
+                        e_emb = torch.logsumexp(torch.stack(e_emb, dim=0), dim=0)
+                    else:
+                        e_emb = torch.zeros(self.config.hidden_size).to(sequence_output)
+                else:
+                    start, end, sent_id = e[0]
+                    if start + offset < c:
+                        e_emb = g_features[0]
+                        g_features = g_features[1:]
+                    else:
+                        e_emb = torch.zeros(self.config.hidden_size).to(sequence_output)
+                entity_embs.append(e_emb)
+
+            entity_embs = torch.stack(entity_embs, dim=0)  # [n_e, d]    
 
             ht_i = torch.LongTensor(hts[i]).to(sequence_output.device)
             hs = torch.index_select(entity_embs, 0, ht_i[:, 0])
@@ -177,11 +231,11 @@ class DocREModel(nn.Module):
                 ):
 
         sequence_output, attention = self.encode(input_ids, attention_mask)
-        adj, g_features, m_cnt, e_cnt = self.get_graph(sequence_output, attention, entity_pos)
-        g_features = self.GAT(g_features, adj)
+        adj, g_features, m_cnt, e_features = self.get_graph(sequence_output, attention, entity_pos)
+        g_features = self.GAT(g_features, adj, e_features)
 
         #hs, rs, ts = self.get_hrt(sequence_output, attention, entity_pos, hts)
-        hs, ts = self.get_new_ht(sequence_output, g_features, m_cnt, e_cnt, entity_pos, hts)
+        hs, ts = self.get_new_ht(sequence_output, attention, g_features, m_cnt, entity_pos, hts)
 
         #hs = torch.tanh(self.head_extractor(torch.cat([hs, rs], dim=1)))
         #ts = torch.tanh(self.tail_extractor(torch.cat([ts, rs], dim=1)))
@@ -201,34 +255,34 @@ class DocREModel(nn.Module):
         return output
 
 class MultilayersGAT(nn.Module):
-    def __init__(self, in_feat, out_feat, nhid, alpha, nheads, dropout=0.0, nlayers=3):
+    def __init__(self, in_feat, out_feat, e_feat, nhid, alpha, nheads, dropout=0.0, nlayers=3):
         super().__init__()
         self.dropout = dropout
         self.nlayers = nlayers
         
-        self.GATlayers = nn.ModuleList([GAT(in_feat if _ == 0 else nhid * nheads, out_feat if _ == nlayers-1 else nhid, dropout=dropout, alpha=alpha, nheads=nheads, islast=(_ == nlayers-1)) for _ in range(nlayers)])
+        self.GATlayers = nn.ModuleList([GAT(in_feat if _ == 0 else nhid * nheads, out_feat if _ == nlayers-1 else nhid, e_feat, dropout=dropout, alpha=alpha, nheads=nheads, islast=(_ == nlayers-1)) for _ in range(nlayers)])
 
-    def forward(self, x, adj):
+    def forward(self, x, adj, e):
         for GATlayer in self.GATlayers:
-            x = GATlayer(x, adj)
+            x = GATlayer(x, adj, e)
         return x
 
 class GAT(nn.Module):
-    def __init__(self, in_features, out_features, alpha, nheads, dropout=0.0, islast=False):
+    def __init__(self, in_features, out_features, e_features, alpha, nheads, dropout=0.0, islast=False):
         super().__init__()
         self.dropout = dropout
         self.islast = islast
         self.nheads = nheads
         self.out_features = out_features
 
-        self.attns = nn.ModuleList([GraphAttentionLayer(in_features, out_features, dropout=dropout, alpha=alpha, concat=not islast) for _ in range(nheads)])
+        self.attns = nn.ModuleList([GraphAttentionLayer(in_features, out_features, e_features, dropout=dropout, alpha=alpha, concat=not islast) for _ in range(nheads)])
         #self.attns = [GraphAttentionLayer(in_features, out_features, dropout=dropout, alpha=alpha, concat=not islast) for _ in range(nheads)]
         #for i, attn in enumerate(self.attns):
         #    self.add_module('attention_{}'.format(i), attn)
     
-    def forward(self, x, adj):
+    def forward(self, x, adj, e):
         x = F.dropout(x, self.dropout, training=self.training)
-        x = torch.cat([att(x, adj) for att in self.attns], dim=1)
+        x = torch.cat([att(x, adj, e) for att in self.attns], dim=1)
         x = F.dropout(x, self.dropout, training=self.training)
         if (self.islast == True):
             N = x.size()[0]
@@ -237,28 +291,30 @@ class GAT(nn.Module):
         return x
 
 class GraphAttentionLayer(nn.Module):
-    def __init__(self, in_features, out_features, alpha, dropout=0.0, concat=True):
+    def __init__(self, in_features, out_features, e_features, alpha, dropout=0.0, concat=True):
         super().__init__()
         self.dropout = dropout
         self.in_features = in_features
         self.out_features = out_features
+        self.e_features = e_features
         self.alpha = alpha
         self.concat = concat
 
-        #self.W = nn.Parameter(torch.zeros(size=(in_features, out_features, ))).to("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.W_e = nn.Parameter(torch.zeros(size=(e_features, in_features, )))
+        nn.init.xavier_uniform_(self.W_e.data, gain=1.414)
         self.W = nn.Parameter(torch.zeros(size=(in_features, out_features, )))
         nn.init.xavier_uniform_(self.W.data, gain=1.414)
-        #self.a = nn.Parameter(torch.zeros(size=(2*out_features, 1))).to("cuda:0" if torch.cuda.is_available() else "cpu")
         self.a = nn.Parameter(torch.zeros(size=(3*out_features, 1)))
 
         nn.init.xavier_uniform_(self.a.data, gain=1.414)
         self.leakyrelu = nn.LeakyReLU(self.alpha)
     
-    def forward(self, input, adj):
+    def forward(self, input, adj, e_feat):
+        e = torch.matmul(torch.matmul(e_feat, self.W_e), self.W)
         h = torch.mm(input, self.W)
         N = h.size()[0]
 
-        a_input = torch.cat([h.repeat(1, N).view(N * N, -1), h.repeat(N, 1)], dim=1).view(N, -1, 2 * self.out_features)
+        a_input = torch.cat([h.repeat(1, N).view(N * N, -1), h.repeat(N, 1), e.view(N * N, -1)], dim=1).view(N, -1, 3 * self.out_features)
         e = self.leakyrelu(torch.matmul(a_input, self.a).squeeze(2))
 
         zero_vec = -9e15*torch.ones_like(e)
