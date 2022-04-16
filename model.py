@@ -63,7 +63,7 @@ class DocREModel(nn.Module):
             m_sum.append(sum)
         
         #  build adj matrix and edge id
-        adj, node_features, node_att, edge_id = [], [], [], []
+        #adj, node_features, node_att, edge_id = [], [], [], []
         for m in m_node:
             node_features.append(m["emb"])
             node_att.append(m["att"])
