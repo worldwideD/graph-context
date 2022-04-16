@@ -4,8 +4,8 @@ python train.py --data_dir ./dataset/docred \
 --train_file train_annotated.json \
 --dev_file dev.json \
 --test_file test.json \
---train_batch_size 2 \
---test_batch_size 4 \
+--train_batch_size 4 \
+--test_batch_size 8 \
 --gradient_accumulation_steps 1 \
 --num_labels 4 \
 --learning_rate 2e-5 \
@@ -14,4 +14,4 @@ python train.py --data_dir ./dataset/docred \
 --num_train_epochs 30.0 \
 --seed 66 \
 --num_class 97 \
---save_path GAT_ver1_net_params.pkl
+--save_path GAT_ver0_net_params.pkl
