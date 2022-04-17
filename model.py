@@ -182,7 +182,7 @@ class DocREModel(nn.Module):
         rss = torch.cat(rss, dim=0)
         return hss, rss, tss
     
-    def get_new_ht(self, sequence_output, attention, g_features, m_cnt, entity_pos, hts):
+    def get_new_ht(self, sequence_output, attention, g_features, entity_pos, hts):
         offset = 1 if self.config.transformer_type in ["bert", "roberta"] else 0
         n, h, _, c = attention.size()
         hss, tss = [], []
@@ -235,7 +235,7 @@ class DocREModel(nn.Module):
         g_features = self.GAT(g_features, adj, e_features)
 
         #hs, rs, ts = self.get_hrt(sequence_output, attention, entity_pos, hts)
-        hs, ts = self.get_new_ht(sequence_output, attention, g_features, m_cnt, entity_pos, hts)
+        hs, ts = self.get_new_ht(sequence_output, attention, g_features, entity_pos, hts)
 
         #hs = torch.tanh(self.head_extractor(torch.cat([hs, rs], dim=1)))
         #ts = torch.tanh(self.tail_extractor(torch.cat([ts, rs], dim=1)))
