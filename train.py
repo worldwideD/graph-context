@@ -1,5 +1,6 @@
 import argparse
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
 import numpy as np
 import torch
@@ -182,7 +183,7 @@ def main():
     args = parser.parse_args()
     wandb.init(project="graph+context")
     
-    os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     args.n_gpu = torch.cuda.device_count()
