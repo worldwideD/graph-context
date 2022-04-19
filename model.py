@@ -5,6 +5,8 @@ from opt_einsum import contract
 from long_seq import process_long_input
 from losses import ATLoss
 
+num_layers = 2
+
 class DocREModel(nn.Module):
     def __init__(self, config, model, emb_size=768, block_size=64, num_labels=-1):
         super().__init__()
@@ -13,15 +15,15 @@ class DocREModel(nn.Module):
         self.hidden_size = config.hidden_size
         self.loss_fnt = ATLoss()
 
-        self.head_extractor = nn.Linear(config.hidden_size, emb_size)
-        self.tail_extractor = nn.Linear(config.hidden_size, emb_size)
+        self.head_extractor = nn.Linear((num_layers + 1) * config.hidden_size, emb_size)
+        self.tail_extractor = nn.Linear((num_layers + 1) * config.hidden_size, emb_size)
         self.bilinear = nn.Linear(emb_size * block_size, config.num_labels)
 
         self.emb_size = emb_size
         self.block_size = block_size
         self.num_labels = num_labels
 
-        self.GAT = MultilayersGAT(in_feat=config.hidden_size, nlayers=2, out_feat=config.hidden_size, e_feat=config.hidden_size, nhid=64, dropout=0.0, alpha=0.2, nheads=12)
+        self.GAT = MultilayersGAT(in_feat=config.hidden_size, nlayers=num_layers, out_feat=config.hidden_size, e_feat=config.hidden_size, nhid=64, dropout=0.0, alpha=0.2, nheads=12)
 
     def encode(self, input_ids, attention_mask):
         config = self.config
@@ -129,7 +131,7 @@ class DocREModel(nn.Module):
         adj_ = torch.tensor(adj).to(sequence_output.device)
         node_features_ = torch.stack(node_features, dim=0)
         e_features_ = torch.stack(e_features, dim=0).view(n_node, n_node, self.config.hidden_size)
-        return adj_, node_features_, m_cnt, e_features_
+        return adj_, node_features_, e_features_
 
     def get_hrt(self, sequence_output, attention, entity_pos, hts):
         offset = 1 if self.config.transformer_type in ["bert", "roberta"] else 0
@@ -231,7 +233,7 @@ class DocREModel(nn.Module):
                 ):
 
         sequence_output, attention = self.encode(input_ids, attention_mask)
-        adj, g_features, m_cnt, e_features = self.get_graph(sequence_output, attention, entity_pos)
+        adj, g_features, e_features = self.get_graph(sequence_output, attention, entity_pos)
         g_features = self.GAT(g_features, adj, e_features)
 
         #hs, rs, ts = self.get_hrt(sequence_output, attention, entity_pos, hts)
@@ -260,45 +262,44 @@ class MultilayersGAT(nn.Module):
         self.dropout = dropout
         self.nlayers = nlayers
         
-        self.GATlayers = nn.ModuleList([GAT(in_feat if _ == 0 else nhid * nheads, out_feat if _ == nlayers-1 else nhid, e_feat, dropout=dropout, alpha=alpha, nheads=nheads, islast=(_ == nlayers-1)) for _ in range(nlayers)])
+        self.GATlayers = nn.ModuleList([GAT(in_feat if _ == 0 else nhid * nheads, out_feat, nhid, e_feat, dropout=dropout, alpha=alpha, nheads=nheads) for _ in range(nlayers)])
 
     def forward(self, x, adj, e):
+        h = [x]
         for GATlayer in self.GATlayers:
-            x = GATlayer(x, adj, e)
-        return x
+            x, y = GATlayer(x, adj, e)
+            h.append(y)
+        h = torch.cat(h, dim=1)
+        return h
 
 class GAT(nn.Module):
-    def __init__(self, in_features, out_features, e_features, alpha, nheads, dropout=0.0, islast=False):
+    def __init__(self, in_features, out_features, hid_features, e_features, alpha, nheads, dropout=0.0):
         super().__init__()
         self.dropout = dropout
-        self.islast = islast
         self.nheads = nheads
         self.out_features = out_features
 
-        self.attns = nn.ModuleList([GraphAttentionLayer(in_features, out_features, e_features, dropout=dropout, alpha=alpha, concat=not islast) for _ in range(nheads)])
-        #self.attns = [GraphAttentionLayer(in_features, out_features, dropout=dropout, alpha=alpha, concat=not islast) for _ in range(nheads)]
-        #for i, attn in enumerate(self.attns):
-        #    self.add_module('attention_{}'.format(i), attn)
+        self.attns = nn.ModuleList([GraphAttentionLayer(in_features, hid_features, e_features, dropout=dropout, alpha=alpha) for _ in range(nheads)])
+        self.W = nn.Parameter(torch.zeros(size=(nheads * hid_features, out_features, )))
+        nn.init.xavier_uniform_(self.W.data, gain=1.414)
     
     def forward(self, x, adj, e):
         x = F.dropout(x, self.dropout, training=self.training)
         x = torch.cat([att(x, adj, e) for att in self.attns], dim=1)
         x = F.dropout(x, self.dropout, training=self.training)
-        if (self.islast == True):
-            N = x.size()[0]
-            x = x.view(N, self.nheads, self.out_features).mean(1)
-            x = F.elu(x)
-        return x
+        N = x.size()[0]
+        y = F.elu(torch.matmul(x, self.W))
+        x = F.elu(x)
+        return x, y
 
 class GraphAttentionLayer(nn.Module):
-    def __init__(self, in_features, out_features, e_features, alpha, dropout=0.0, concat=True):
+    def __init__(self, in_features, out_features, e_features, alpha, dropout=0.0):
         super().__init__()
         self.dropout = dropout
         self.in_features = in_features
         self.out_features = out_features
         self.e_features = e_features
         self.alpha = alpha
-        self.concat = concat
 
         self.W_e = nn.Parameter(torch.zeros(size=(e_features, in_features, )))
         nn.init.xavier_uniform_(self.W_e.data, gain=1.414)
@@ -324,7 +325,4 @@ class GraphAttentionLayer(nn.Module):
         att = F.dropout(att, self.dropout, training=self.training)
         h_prime = torch.matmul(att, h)
 
-        if self.concat:
-            return F.elu(h_prime)
-        else:
-            return h_prime
+        return h_prime
