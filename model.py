@@ -115,20 +115,25 @@ class DocREModel(nn.Module):
         off = 0
         for i in range(d_cnt):
             att = []
-            for p in range(m_sum[i]+1):
-                for q in range(m_sum[i]+1):
+            for p in range(m_sum[i]):
+                for q in range(m_sum[i]):
                     att.append(ht_att[p][q])
             att = torch.stack(att, dim=0)
             ctx = contract("ld,rl->rd", sequence_output[i], att)
-            ctx = ctx.view(m_sum[i]+1, m_sum[i]+1, self.config.hidden_size)
-            for p in range(m_sum[i]+1):
+            ctx = ctx.view(m_sum[i], m_sum[i], self.config.hidden_size)
+            for p in range(m_sum[i]):
                 for q in range(n_node):
-                    if q >= off and q < off+m_sum[i]+1:
+                    if q >= off and q < off+m_sum[i]:
                         e_features.append(ctx[p, q-off])
                     else:
                         feat = torch.zeros(self.config.hidden_size).to(sequence_output.device)
                         e_features.append(feat)
-            off += m_sum[i]+1
+            off += m_sum[i]
+        for i in range(d_cnt):
+            for j in range(n_node):
+                feat = torch.zeros(self.config.hidden_size).to(sequence_output.device)
+                e_features.append(feat)
+        
         
         # return
         adj_ = torch.tensor(adj).to(sequence_output.device)

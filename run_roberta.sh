@@ -14,4 +14,4 @@ python train.py --data_dir ./dataset/docred \
 --num_train_epochs 30.0 \
 --seed 66 \
 --num_class 97 \
---save_path roberta_params.pkl
+--save_path roberta_ver2.2_params.pkl
