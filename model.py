@@ -117,7 +117,7 @@ class DocREModel(nn.Module):
             att = []
             for p in range(m_sum[i]):
                 for q in range(m_sum[i]):
-                    att.append(ht_att[p][q])
+                    att.append(ht_att[p+off, q+off])
             att = torch.stack(att, dim=0)
             ctx = contract("ld,rl->rd", sequence_output[i], att)
             ctx = ctx.view(m_sum[i], m_sum[i], self.config.hidden_size)
