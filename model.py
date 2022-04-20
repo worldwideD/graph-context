@@ -72,7 +72,10 @@ class DocREModel(nn.Module):
             _adj = []
 
             for _m in m_node:
-                _adj.append(int(m["entity"] == _m["entity"] or (m["doc"] == _m["doc"] and m["sent"] == _m["sent"])))
+                if m["doc"] == _m["doc"] and m["sent"] == _m["sent"]:
+                    _adj.append(2)
+                else:
+                    _adj.append(int(m["entity"] == _m["entity"]))
                 edge_id.append([m["id"], _m["id"]])
             
             for j in range(d_cnt):
@@ -307,7 +310,9 @@ class GraphAttentionLayer(nn.Module):
 
         self.W_k = nn.Parameter(torch.zeros(size=(in_features, out_features, )))
         nn.init.xavier_uniform_(self.W_k.data, gain=1.414)
-        self.W_q = nn.Parameter(torch.zeros(size=(in_features + e_features, out_features, )))
+        self.W_qe = nn.Parameter(torch.zeros(size=(in_features + e_features, out_features, )))
+        nn.init.xavier_uniform_(self.W_qe.data, gain=1.414)
+        self.W_q = nn.Parameter(torch.zeros(size=(in_features, out_features, )))
         nn.init.xavier_uniform_(self.W_q.data, gain=1.414)
         self.a = nn.Parameter(torch.zeros(size=(2*out_features, 1)))
         nn.init.xavier_uniform_(self.a.data, gain=1.414)
@@ -316,8 +321,12 @@ class GraphAttentionLayer(nn.Module):
     def forward(self, input, adj, e_feat):
         hk = torch.mm(input, self.W_k)
         N = hk.size()[0]
-        h_q = torch.cat([input.repeat(N, 1), e_feat.view(N * N, -1)], dim=1)
-        h_q = torch.matmul(h_q, self.W_q)
+        h_qe = torch.cat([input.repeat(N, 1), e_feat.view(N * N, -1)], dim=1)
+        h_qe = torch.matmul(h_qe, self.W_qe)
+        h_q = torch.mm(input, self.W_q).repeat(N, 1)
+        _adj = adj.unsqueeze(2).repeat(1, 1, self.out_features).view(N * N, -1)
+        h_q = torch.where(_adj > 1, h_qe, h_q)
+
         a_input = torch.cat([hk.repeat(1, N).view(N * N, -1), h_q], dim=1).view(N, -1, 2 * self.out_features)
         e = self.leakyrelu(torch.matmul(a_input, self.a).squeeze(2))
 
@@ -330,9 +339,3 @@ class GraphAttentionLayer(nn.Module):
         h_prime = torch.stack([torch.matmul(att[i], h_q[i]) for i in range(N)], dim=0).squeeze(1)
 
         return h_prime
-'''
-        if self.concat:
-            return F.elu(h_prime)
-        else:
-            return h_prime
-'''
