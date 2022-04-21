@@ -1,6 +1,6 @@
 import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import numpy as np
 import torch
@@ -36,6 +36,7 @@ def train(args, model, train_features, dev_features, test_features):
                           'labels': batch[2],
                           'entity_pos': batch[3],
                           'hts': batch[4],
+                          'sent_pos': batch[5],
                           }
                 outputs = model(**inputs)
                 loss = outputs[0] / args.gradient_accumulation_steps
@@ -72,7 +73,6 @@ def train(args, model, train_features, dev_features, test_features):
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
 
     #print(model.named_parameters)
-    
     model, optimizer = amp.initialize(model, optimizer, opt_level="O1", verbosity=0)
     #model = nn.DataParallel(model, device_ids=[0, 1])
     num_steps = 0
@@ -91,6 +91,7 @@ def evaluate(args, model, features, tag="dev"):
                   'attention_mask': batch[1].to(args.device),
                   'entity_pos': batch[3],
                   'hts': batch[4],
+                  'sent_pos': batch[5],
                   }
 
         with torch.no_grad():
@@ -121,6 +122,7 @@ def report(args, model, features):
                   'attention_mask': batch[1].to(args.device),
                   'entity_pos': batch[3],
                   'hts': batch[4],
+                  'sent_pos': batch[5],
                   }
 
         with torch.no_grad():

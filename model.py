@@ -36,11 +36,20 @@ class DocREModel(nn.Module):
         sequence_output, attention = process_long_input(self.model, input_ids, attention_mask, start_tokens, end_tokens)
         return sequence_output, attention
     
-    def get_graph(self, sequence_output, attention, entity_pos):
+    def get_graph(self, sequence_output, attention, entity_pos, sent_pos):
         offset = 1 if self.config.transformer_type in ["bert", "roberta"] else 0
-        m_cnt, e_cnt, d_cnt, m_node, m_sum = 0, 0, len(entity_pos), [], []
-        n, h, _, c = attention.size()
-        # get mention info  
+        m_cnt, e_cnt, s_cnt, d_cnt, m_node, m_sum = 0, 0, 0, len(entity_pos), [], []
+        n, heads, _, c = attention.size()
+        def sent_ht(doc, sent):
+            h = 0
+            t = 0
+            for i in range(sent+1):
+                h = t
+                t = sent_pos[doc][i]
+            return h, min(t, c)
+        sent_dict = {}
+        sent = []
+        # get mention info
         for i in range(d_cnt):
             sum = 0
             for e in entity_pos[i]:
@@ -53,6 +62,10 @@ class DocREModel(nn.Module):
                             m_node.append({'emb': m_emb, 'att': m_att, 'id': m_cnt, 'sent': sent_id, 'entity': e_cnt, 'doc': i})
                             m_cnt += 1
                             sum += 1
+                            if (i, sent_id) not in sent_dict:
+                                sent_dict[(i, sent_id)] = s_cnt
+                                sent.append((i, sent_id))
+                                s_cnt += 1
                 else:
                     start, end, sent_id = e[0]
                     if start + offset < c:
@@ -61,6 +74,10 @@ class DocREModel(nn.Module):
                         m_node.append({'emb': m_emb, 'att': m_att, 'id': m_cnt, 'sent': sent_id, 'entity': e_cnt, 'doc': i})
                         m_cnt += 1
                         sum += 1
+                        if (i, sent_id) not in sent_dict:
+                            sent_dict[(i, sent_id)] = s_cnt
+                            sent.append((i, sent_id))
+                            s_cnt += 1
                 e_cnt += 1
             m_sum.append(sum)
         
@@ -78,27 +95,29 @@ class DocREModel(nn.Module):
                     _adj.append(int(m["entity"] == _m["entity"]))
                 edge_id.append([m["id"], _m["id"]])
             
-            for j in range(d_cnt):
-                _adj.append(int(m["doc"] == j))
+            for j in range(s_cnt):
+                _adj.append(int(sent_dict[(m["doc"], m["sent"])]))
                 edge_id.append([m["id"], m_cnt+j])
 
             adj.append(_adj)
         
-        for i in range(d_cnt):
+        for i in range(s_cnt):
             feature, _adj = [], []
             
             for m in m_node:
-                _adj.append(int(m["doc"] == i))
+                _adj.append(int(sent_dict[(m["doc"], m["sent"])]))
                 edge_id.append([m_cnt+i, m["id"]])
-            for j in range(d_cnt):
-                _adj.append(int(i == j))
+            for j in range(s_cnt):
+                _adj.append(int(sent[i][0] == sent[j][0]))
                 edge_id.append([m_cnt+i, m_cnt+j])
-            for j in range(c):
-                feature.append(sequence_output[i, j])
+            
+            h, t = sent_ht(sent[i][0], sent[i][1])
+            for j in range(h, t):
+                feature.append(sequence_output[sent[i][0], j])
             
             adj.append(_adj)
             node_features.append(torch.logsumexp(torch.stack(feature, dim=0), dim=0))
-            att = torch.ones(h, c).to(attention)
+            att = torch.zeros(heads, c).to(attention)
             node_att.append(att)
         
         # calculate attention
@@ -109,26 +128,30 @@ class DocREModel(nn.Module):
         ht_att = (h_att * t_att).mean(1)
         ht_att = ht_att / (ht_att.sum(1, keepdim=True) + 1e-5)
 
-        n_node = m_cnt+d_cnt
+        n_node = m_cnt+s_cnt
         e_features = []
         ht_att = ht_att.view(n_node, n_node, c)
         off = 0
         for i in range(d_cnt):
             att = []
-            for p in range(m_sum[i]+1):
-                for q in range(m_sum[i]+1):
-                    att.append(ht_att[p][q])
+            for p in range(m_sum[i]):
+                for q in range(m_sum[i]):
+                    att.append(ht_att[p+off, q+off])
             att = torch.stack(att, dim=0)
             ctx = contract("ld,rl->rd", sequence_output[i], att)
-            ctx = ctx.view(m_sum[i]+1, m_sum[i]+1, self.config.hidden_size)
-            for p in range(m_sum[i]+1):
+            ctx = ctx.view(m_sum[i], m_sum[i], self.config.hidden_size)
+            for p in range(m_sum[i]):
                 for q in range(n_node):
-                    if q >= off and q < off+m_sum[i]+1:
+                    if q >= off and q < off+m_sum[i]:
                         e_features.append(ctx[p, q-off])
                     else:
                         feat = torch.zeros(self.config.hidden_size).to(sequence_output.device)
                         e_features.append(feat)
-            off += m_sum[i]+1
+            off += m_sum[i]
+        for i in range(s_cnt):
+            for j in range(n_node):
+                feat = torch.zeros(self.config.hidden_size).to(sequence_output.device)
+                e_features.append(feat)
         
         # return
         adj_ = torch.tensor(adj).to(sequence_output.device)
@@ -232,11 +255,12 @@ class DocREModel(nn.Module):
                 labels=None,
                 entity_pos=None,
                 hts=None,
+                sent_pos=None,
                 instance_mask=None,
                 ):
 
         sequence_output, attention = self.encode(input_ids, attention_mask)
-        adj, g_features, e_features = self.get_graph(sequence_output, attention, entity_pos)
+        adj, g_features, e_features = self.get_graph(sequence_output, attention, entity_pos, sent_pos)
         g_features = self.GAT(g_features, adj, e_features)
 
         #hs, rs, ts = self.get_hrt(sequence_output, attention, entity_pos, hts)

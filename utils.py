@@ -18,7 +18,8 @@ def collate_fn(batch):
     labels = [f["labels"] for f in batch]
     entity_pos = [f["entity_pos"] for f in batch]
     hts = [f["hts"] for f in batch]
+    sent_pos = [f["sent_pos"] for f in batch]
     input_ids = torch.tensor(input_ids, dtype=torch.long)
     input_mask = torch.tensor(input_mask, dtype=torch.float)
-    output = (input_ids, input_mask, labels, entity_pos, hts)
+    output = (input_ids, input_mask, labels, entity_pos, hts, sent_pos)
     return output

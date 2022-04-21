@@ -27,6 +27,7 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
     for sample in tqdm(data, desc="Example"):
         sents = []
         sent_map = []
+        sent_pos = []
 
         entities = sample['vertexSet']
         entity_start, entity_end = [], []
@@ -48,6 +49,7 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
                 sents.extend(tokens_wordpiece)
             new_map[i_t + 1] = len(sents)
             sent_map.append(new_map)
+            sent_pos.append(len(sents))
 
         train_triple = {}
         if "labels" in sample:
@@ -98,6 +100,7 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
                    'entity_pos': entity_pos,
                    'labels': relations,
                    'hts': hts,
+                   'sent_pos': sent_pos,
                    'title': sample['title'],
                    }
         features.append(feature)
