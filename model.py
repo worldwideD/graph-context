@@ -6,6 +6,7 @@ from long_seq import process_long_input
 from losses import ATLoss
 
 num_layers = 2
+n_heads = 8
 
 class DocREModel(nn.Module):
     def __init__(self, config, model, emb_size=768, block_size=64, num_labels=-1):
@@ -23,7 +24,9 @@ class DocREModel(nn.Module):
         self.block_size = block_size
         self.num_labels = num_labels
 
-        self.GAT = MultilayersGAT(in_feat=config.hidden_size, nlayers=num_layers, out_feat=config.hidden_size, e_feat=config.hidden_size, nhid=64, dropout=0.0, alpha=0.2, nheads=12)
+        assert config.hidden_size % n_heads == 0
+
+        self.GAT = MultilayersGAT(in_feat=config.hidden_size, nlayers=num_layers, out_feat=config.hidden_size, e_feat=config.hidden_size, nhid=config.hidden_size // n_heads, dropout=0.5, alpha=0.2, nheads=n_heads)
 
     def encode(self, input_ids, attention_mask):
         config = self.config
@@ -92,11 +95,11 @@ class DocREModel(nn.Module):
                 if m["doc"] == _m["doc"] and m["sent"] == _m["sent"]:
                     _adj.append(2)
                 else:
-                    _adj.append(int(m["entity"] == _m["entity"]))
+                    _adj.append(int(m["id"] != _m["id"] and m["entity"] == _m["entity"]))
                 edge_id.append([m["id"], _m["id"]])
             
             for j in range(s_cnt):
-                _adj.append(int(sent_dict[(m["doc"], m["sent"])]))
+                _adj.append(int(sent[j][0] == m["doc"] and sent[j][1] == m["sent"]))
                 edge_id.append([m["id"], m_cnt+j])
 
             adj.append(_adj)
@@ -105,10 +108,10 @@ class DocREModel(nn.Module):
             feature, _adj = [], []
             
             for m in m_node:
-                _adj.append(int(sent_dict[(m["doc"], m["sent"])]))
+                _adj.append(int(sent[i][0] == m["doc"] and sent[i][1] == m["sent"]))
                 edge_id.append([m_cnt+i, m["id"]])
             for j in range(s_cnt):
-                _adj.append(int(sent[i][0] == sent[j][0]))
+                _adj.append(int(sent[i][0] == sent[j][0] and i != j))
                 edge_id.append([m_cnt+i, m_cnt+j])
             
             h, t = sent_ht(sent[i][0], sent[i][1])
@@ -284,18 +287,18 @@ class DocREModel(nn.Module):
         return output
 
 class MultilayersGAT(nn.Module):
-    def __init__(self, in_feat, out_feat, e_feat, nhid, alpha, nheads, dropout=0.0, nlayers=3):
+    def __init__(self, in_feat, out_feat, e_feat, nhid, alpha, nheads, dropout=0.0, nlayers=2):
         super().__init__()
         self.dropout = dropout
         self.nlayers = nlayers
         
-        self.GATlayers = nn.ModuleList([GAT(in_feat if _ == 0 else nhid * nheads, out_feat, nhid, e_feat, dropout=dropout, alpha=alpha, nheads=nheads) for _ in range(nlayers)])
+        self.GATlayers = nn.ModuleList([GAT(in_feat, out_feat, nhid, e_feat, dropout=dropout, alpha=alpha, nheads=nheads) for _ in range(nlayers)])
 
     def forward(self, x, adj, e):
         h = [x]
         for GATlayer in self.GATlayers:
-            x, y = GATlayer(x, adj, e)
-            h.append(y)
+            x = GATlayer(x, adj, e)
+            h.append(x)
         h = torch.cat(h, dim=1)
 
         return h
@@ -308,20 +311,20 @@ class GAT(nn.Module):
         self.out_features = out_features
 
         self.attns = nn.ModuleList([GraphAttentionLayer(in_features, hid_features, e_features, dropout=dropout, alpha=alpha) for _ in range(nheads)])
-        self.W = nn.Parameter(torch.zeros(size=(nheads * hid_features, out_features, )))
-        nn.init.xavier_uniform_(self.W.data, gain=1.414)
+        #self.W = nn.Parameter(torch.zeros(size=(nheads * hid_features, out_features, )))
+        #nn.init.xavier_uniform_(self.W.data, gain=1.414)
     
     def forward(self, x, adj, e):
         x = F.dropout(x, self.dropout, training=self.training)
         x = torch.cat([att(x, adj, e) for att in self.attns], dim=1)
-        x = F.dropout(x, self.dropout, training=self.training)
+        #x = F.dropout(x, self.dropout, training=self.training)
         
         N = x.size()[0]
         #y = x.view(N, self.nheads, self.out_features).mean(1)
-        y = F.elu(torch.matmul(x, self.W))
+        #y = F.elu(torch.matmul(x, self.W))
         x = F.elu(x)
 
-        return x, y
+        return x
 
 class GraphAttentionLayer(nn.Module):
     def __init__(self, in_features, out_features, e_features, alpha, dropout=0.0):
@@ -361,5 +364,6 @@ class GraphAttentionLayer(nn.Module):
         att = F.dropout(att, self.dropout, training=self.training)
         h_q = h_q.view(N, N, -1)
         h_prime = torch.stack([torch.matmul(att[i], h_q[i]) for i in range(N)], dim=0).squeeze(1)
+        h_prime = h_prime + hk
 
         return h_prime
