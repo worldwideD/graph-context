@@ -315,7 +315,7 @@ class GAT(nn.Module):
         #nn.init.xavier_uniform_(self.W.data, gain=1.414)
     
     def forward(self, x, adj, e):
-        x = F.dropout(x, self.dropout, training=self.training)
+        #x = F.dropout(x, self.dropout, training=self.training)
         x = torch.cat([att(x, adj, e) for att in self.attns], dim=1)
         #x = F.dropout(x, self.dropout, training=self.training)
         

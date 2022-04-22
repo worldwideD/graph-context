@@ -1,4 +1,4 @@
-python train.py --data_dir ./dataset/docred \
+nohup python train.py --data_dir ./dataset/docred \
 --transformer_type bert \
 --model_name_or_path bert-base-cased \
 --train_file train_annotated.json \
