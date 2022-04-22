@@ -3,6 +3,8 @@
 *.pyc
 *.pkl
 
+*.out
+
 dataset
 scripts
 wandb

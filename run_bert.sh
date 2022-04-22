@@ -1,4 +1,4 @@
-nohup python train.py --data_dir ./dataset/docred \
+python train.py --data_dir ./dataset/docred \
 --transformer_type bert \
 --model_name_or_path bert-base-cased \
 --train_file train_annotated.json \
@@ -11,7 +11,7 @@ nohup python train.py --data_dir ./dataset/docred \
 --learning_rate 2e-5 \
 --max_grad_norm 1.0 \
 --warmup_ratio 0.06 \
---num_train_epochs 30.0 \
+--num_train_epochs 200.0 \
 --seed 66 \
 --num_class 97 \
 --save_path GAT_ver4_net_params.pkl

@@ -92,7 +92,7 @@ class DocREModel(nn.Module):
             _adj = []
 
             for _m in m_node:
-                if m["doc"] == _m["doc"] and m["sent"] == _m["sent"]:
+                if m["doc"] == _m["doc"] and m["sent"] == _m["sent"] and m["id"] != _m["id"]:
                     _adj.append(2)
                 else:
                     _adj.append(int(m["id"] != _m["id"] and m["entity"] == _m["entity"]))
