@@ -1,6 +1,6 @@
 import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"
 
 import numpy as np
 import torch
@@ -74,6 +74,70 @@ def train(args, model, train_features, dev_features, test_features):
     #print(model.named_parameters)
     
     model, optimizer = amp.initialize(model, optimizer, opt_level="O1", verbosity=0)
+    #model = nn.DataParallel(model, device_ids=[0, 1])
+    num_steps = 0
+    set_seed(args)
+    model.zero_grad()
+    finetune(train_features, optimizer, args.num_train_epochs, num_steps)
+
+def continuetrain(args, model, train_features, dev_features, test_features):
+    def finetune(features, optimizer, num_epoch, num_steps):
+        best_score = -1
+        train_dataloader = DataLoader(features, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn, drop_last=True)
+        train_iterator = range(int(num_epoch))
+        total_steps = int(len(train_dataloader) * num_epoch // args.gradient_accumulation_steps)
+        warmup_steps = int(total_steps * args.warmup_ratio)
+        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
+        print("Total steps: {}".format(total_steps))
+        print("Warmup steps: {}".format(warmup_steps))
+        for epoch in train_iterator:
+            model.zero_grad()
+            for step, batch in enumerate(train_dataloader):
+                model.train()
+                inputs = {'input_ids': batch[0].to(args.device),
+                          'attention_mask': batch[1].to(args.device),
+                          'labels': batch[2],
+                          'entity_pos': batch[3],
+                          'hts': batch[4],
+                          }
+                outputs = model(**inputs)
+                loss = outputs[0] / args.gradient_accumulation_steps
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+                if step % args.gradient_accumulation_steps == 0:
+                    if args.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                    optimizer.step()
+                    scheduler.step()
+                    model.zero_grad()
+                    num_steps += 1
+                wandb.log({"loss": loss.item()}, step=num_steps)
+                if (step + 1) == len(train_dataloader) - 1 or (args.evaluation_steps > 0 and num_steps % args.evaluation_steps == 0 and step % args.gradient_accumulation_steps == 0):
+                    dev_score, dev_output = evaluate(args, model, dev_features, tag="dev")
+                    wandb.log(dev_output, step=num_steps)
+                    print(dev_output)
+                    if dev_score > best_score:
+                        best_score = dev_score
+                        pred = report(args, model, test_features)
+                        with open("result.json", "w") as fh:
+                            json.dump(pred, fh)
+                        if args.save_path != "":
+                            torch.save(model.state_dict(), args.save_path)
+        return num_steps
+
+    new_layer = ["extractor", "bilinear"]
+    GAT_layer = ["GAT"]
+    optimizer_grouped_parameters = [
+        {"params": [p for n, p in model.named_parameters() if not any(nd in n for nd in new_layer) and not any(nd in n for nd in GAT_layer)], },
+        {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in new_layer)], "lr": 1e-4},
+        {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in GAT_layer)], "lr": 1e-3},
+    ]
+    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+
+    #print(model.named_parameters)
+    
+    model, optimizer = amp.initialize(model, optimizer, opt_level="O1", verbosity=0)
+    model.load_state_dict(torch.load(args.load_path))
     #model = nn.DataParallel(model, device_ids=[0, 1])
     num_steps = 0
     set_seed(args)
@@ -205,7 +269,7 @@ def main():
     train_features = read(train_file, tokenizer, max_seq_length=args.max_seq_length)
     dev_features = read(dev_file, tokenizer, max_seq_length=args.max_seq_length)
     test_features = read(test_file, tokenizer, max_seq_length=args.max_seq_length)
-
+    
     model = AutoModel.from_pretrained(
         args.model_name_or_path,
         from_tf=bool(".ckpt" in args.model_name_or_path),
@@ -222,6 +286,8 @@ def main():
 
     if args.load_path == "":  # Training
         train(args, model, train_features, dev_features, test_features)
+    elif args.num_train_epochs > 0:
+        continuetrain(args, model, train_features, dev_features, test_features)
     else:  # Testing
         model = amp.initialize(model, opt_level="O1", verbosity=0)
         model.load_state_dict(torch.load(args.load_path))
@@ -230,7 +296,6 @@ def main():
         pred = report(args, model, test_features)
         with open("result.json", "w") as fh:
             json.dump(pred, fh)
-
 
 if __name__ == "__main__":
     main()

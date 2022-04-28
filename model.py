@@ -6,6 +6,7 @@ from long_seq import process_long_input
 from losses import ATLoss
 
 num_layers = 2
+n_heads = 8
 
 class DocREModel(nn.Module):
     def __init__(self, config, model, emb_size=768, block_size=64, num_labels=-1):
@@ -23,8 +24,9 @@ class DocREModel(nn.Module):
         self.block_size = block_size
         self.num_labels = num_labels
 
-        self.GAT = MultilayersGAT(in_feat=config.hidden_size, nlayers=num_layers, out_feat=config.hidden_size, e_feat=config.hidden_size, nhid=64, dropout=0.0, alpha=0.2, nheads=12)
+        assert config.hidden_size % n_heads == 0
 
+        self.GAT = MultilayersGAT(in_feat=config.hidden_size, nlayers=num_layers, out_feat=config.hidden_size, e_feat=config.hidden_size, nhid=config.hidden_size // n_heads, dropout=0.0, alpha=0.2, nheads=n_heads)
     def encode(self, input_ids, attention_mask):
         config = self.config
         if config.transformer_type == "bert":
@@ -72,10 +74,10 @@ class DocREModel(nn.Module):
             _adj = []
 
             for _m in m_node:
-                if m["doc"] == _m["doc"] and m["sent"] == _m["sent"]:
+                if m["doc"] == _m["doc"] and m["sent"] == _m["sent"] and m["id"] != _m["id"]:
                     _adj.append(2)
                 else:
-                    _adj.append(int(m["entity"] == _m["entity"]))
+                    _adj.append(int(m["entity"] == _m["entity"] and m["id"] != _m["id"]))
                 edge_id.append([m["id"], _m["id"]])
             
             for j in range(d_cnt):
@@ -91,23 +93,21 @@ class DocREModel(nn.Module):
                 _adj.append(int(m["doc"] == i))
                 edge_id.append([m_cnt+i, m["id"]])
             for j in range(d_cnt):
-                _adj.append(int(i == j))
+                _adj.append(0)
                 edge_id.append([m_cnt+i, m_cnt+j])
-            for j in range(c):
-                feature.append(sequence_output[i, j])
             
             adj.append(_adj)
-            node_features.append(torch.logsumexp(torch.stack(feature, dim=0), dim=0))
+            node_features.append(sequence_output[i, 0])
             att = torch.ones(h, c).to(attention)
             node_att.append(att)
         
         # calculate attention
-        node_att = torch.stack(node_att, dim=0)
-        edge_id = torch.LongTensor(edge_id).to(sequence_output.device)
-        h_att = torch.index_select(node_att, 0, edge_id[:, 0])
+        node_att = torch.stack(node_att, dim=0)  # [node_num, h, c]
+        edge_id = torch.LongTensor(edge_id).to(sequence_output.device)  # [node_num*node_num, 2]
+        h_att = torch.index_select(node_att, 0, edge_id[:, 0])  # [node_num*node_num, h, c]
         t_att = torch.index_select(node_att, 0, edge_id[:, 1])
         ht_att = (h_att * t_att).mean(1)
-        ht_att = ht_att / (ht_att.sum(1, keepdim=True) + 1e-5)
+        ht_att = ht_att / (ht_att.sum(1, keepdim=True) + 1e-5)  # [node_num*node_num, c]
 
         n_node = m_cnt+d_cnt
         e_features = []
@@ -265,18 +265,18 @@ class DocREModel(nn.Module):
         return output
 
 class MultilayersGAT(nn.Module):
-    def __init__(self, in_feat, out_feat, e_feat, nhid, alpha, nheads, dropout=0.0, nlayers=3):
+    def __init__(self, in_feat, out_feat, e_feat, nhid, alpha, nheads, dropout=0.0, nlayers=2):
         super().__init__()
         self.dropout = dropout
         self.nlayers = nlayers
         
-        self.GATlayers = nn.ModuleList([GAT(in_feat if _ == 0 else nhid * nheads, out_feat, nhid, e_feat, dropout=dropout, alpha=alpha, nheads=nheads) for _ in range(nlayers)])
+        self.GATlayers = nn.ModuleList([GAT(in_feat, out_feat, nhid, e_feat, dropout=dropout, alpha=alpha, nheads=nheads) for _ in range(nlayers)])
 
     def forward(self, x, adj, e):
         h = [x]
         for GATlayer in self.GATlayers:
-            x, y = GATlayer(x, adj, e)
-            h.append(y)
+            x = GATlayer(x, adj, e)
+            h.append(x)
         h = torch.cat(h, dim=1)
 
         return h
@@ -289,20 +289,20 @@ class GAT(nn.Module):
         self.out_features = out_features
 
         self.attns = nn.ModuleList([GraphAttentionLayer(in_features, hid_features, e_features, dropout=dropout, alpha=alpha) for _ in range(nheads)])
-        self.W = nn.Parameter(torch.zeros(size=(nheads * hid_features, out_features, )))
-        nn.init.xavier_uniform_(self.W.data, gain=1.414)
+        #self.W = nn.Parameter(torch.zeros(size=(nheads * hid_features, out_features, )))
+        #nn.init.xavier_uniform_(self.W.data, gain=1.414)
     
     def forward(self, x, adj, e):
-        x = F.dropout(x, self.dropout, training=self.training)
+        #x = F.dropout(x, self.dropout, training=self.training)
         x = torch.cat([att(x, adj, e) for att in self.attns], dim=1)
-        x = F.dropout(x, self.dropout, training=self.training)
+        #x = F.dropout(x, self.dropout, training=self.training)
         
         N = x.size()[0]
         #y = x.view(N, self.nheads, self.out_features).mean(1)
-        y = F.elu(torch.matmul(x, self.W))
+        #y = F.elu(torch.matmul(x, self.W))
         x = F.elu(x)
 
-        return x, y
+        return x
 
 class GraphAttentionLayer(nn.Module):
     def __init__(self, in_features, out_features, e_features, alpha, dropout=0.0):
@@ -330,7 +330,8 @@ class GraphAttentionLayer(nn.Module):
         h_qe = torch.matmul(h_qe, self.W_qe)
         h_q = torch.mm(input, self.W_q).repeat(N, 1)
         _adj = adj.unsqueeze(2).repeat(1, 1, self.out_features).view(N * N, -1)
-        h_q = torch.where(_adj > 1, h_qe, h_q)
+        #h_q = torch.where(_adj > 1, h_qe, h_q)
+        h_q = h_qe
 
         a_input = torch.cat([hk.repeat(1, N).view(N * N, -1), h_q], dim=1).view(N, -1, 2 * self.out_features)
         e = self.leakyrelu(torch.matmul(a_input, self.a).squeeze(2))
@@ -339,8 +340,9 @@ class GraphAttentionLayer(nn.Module):
         
         att = torch.where(adj > 0, e, zero_vec)
         att = F.softmax(att, dim=1).unsqueeze(1)
-        att = F.dropout(att, self.dropout, training=self.training)
+        #att = F.dropout(att, self.dropout, training=self.training)
         h_q = h_q.view(N, N, -1)
         h_prime = torch.stack([torch.matmul(att[i], h_q[i]) for i in range(N)], dim=0).squeeze(1)
+        h_prime = h_prime + hk
 
         return h_prime

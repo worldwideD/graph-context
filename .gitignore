@@ -2,6 +2,10 @@
 *.json
 *.pyc
 *.pkl
+*.out
+*.swp
+
+original_model_hqz_2022_4_27.py
 
 dataset
 scripts
