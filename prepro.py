@@ -13,6 +13,37 @@ def chunks(l, n):
         res += [l[i:i + n]]
     return res
 
+def get_graph(entity_pos):
+	e_cnt, m_node = 0, []
+	for e in entity_pos[i]:
+		for start, end, sent_id in e:
+			m_node.append({'sent': sent_id, 'entity': e_cnt})
+		e_cnt += 1
+	
+	# mention node
+	adj = []
+	for i, m in enumerate(m_node):
+		_adj = []
+		for j, _m in enumerate(m_node):
+			# intra-sent edge
+			if m["sent"] == _m["sent"] and i != j:
+				_adj.append(2)
+			# coreference edge
+			elif m["entity"] == _m["entity"] and i != j:
+				_adj.append(1)
+			else:
+				_adj.append(0)
+		#  m-d edge
+		_adj.append(1)
+		adj.append(_adj)
+	
+	# document node
+	_adj = []
+	for m in m_node:
+		_adj.append(1)
+	_adj.append(0)
+	adj.append(_adj)
+	return adj
 
 def read_docred(file_in, tokenizer, max_seq_length=1024):
     i_line = 0
@@ -92,6 +123,7 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
         sents = sents[:max_seq_length - 2]
         input_ids = tokenizer.convert_tokens_to_ids(sents)
         input_ids = tokenizer.build_inputs_with_special_tokens(input_ids)
+        adj = get_graph(entity_pos)
 
         i_line += 1
         feature = {'input_ids': input_ids,
@@ -99,6 +131,7 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
                    'labels': relations,
                    'hts': hts,
                    'title': sample['title'],
+				   'adj': adj,
                    }
         features.append(feature)
 
@@ -205,7 +238,7 @@ def read_cdr(file_in, tokenizer, max_seq_length=1024):
             sents = sents[:max_seq_length - 2]
             input_ids = tokenizer.convert_tokens_to_ids(sents)
             input_ids = tokenizer.build_inputs_with_special_tokens(input_ids)
-
+            
             if len(hts) > 0:
                 feature = {'input_ids': input_ids,
                            'entity_pos': entity_pos,

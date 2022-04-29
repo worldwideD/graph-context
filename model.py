@@ -46,18 +46,9 @@ class DocREModel(nn.Module):
         for i in range(d_cnt):
             sum = 0
             for e in entity_pos[i]:
-                if len(e) > 1:
-                    for start, end, sent_id in e:
-                        if start + offset < c:
-                            # In case the entity mention is truncated due to limited max seq length.
-                            m_emb = sequence_output[i, start + offset]
-                            m_att = attention[i, :, start + offset]
-                            m_node.append({'emb': m_emb, 'att': m_att, 'id': m_cnt, 'sent': sent_id, 'entity': e_cnt, 'doc': i})
-                            m_cnt += 1
-                            sum += 1
-                else:
-                    start, end, sent_id = e[0]
+                for start, end, sent_id in e:
                     if start + offset < c:
+                        # In case the entity mention is truncated due to limited max seq length.
                         m_emb = sequence_output[i, start + offset]
                         m_att = attention[i, :, start + offset]
                         m_node.append({'emb': m_emb, 'att': m_att, 'id': m_cnt, 'sent': sent_id, 'entity': e_cnt, 'doc': i})
@@ -74,10 +65,10 @@ class DocREModel(nn.Module):
             _adj = []
 
             for _m in m_node:
-                if m["doc"] == _m["doc"] and m["sent"] == _m["sent"] and m["id"] != _m["id"]:
+                if m["doc"] == _m["doc"] and m["sent"] == _m["sent"]: # add a self-loop here
                     _adj.append(2)
                 else:
-                    _adj.append(int(m["entity"] == _m["entity"] and m["id"] != _m["id"]))
+                    _adj.append(int(m["entity"] == _m["entity"]))
                 edge_id.append([m["id"], _m["id"]])
             
             for j in range(d_cnt):
@@ -87,13 +78,13 @@ class DocREModel(nn.Module):
             adj.append(_adj)
         
         for i in range(d_cnt):
-            feature, _adj = [], []
+            _adj = []
             
             for m in m_node:
                 _adj.append(int(m["doc"] == i))
                 edge_id.append([m_cnt+i, m["id"]])
             for j in range(d_cnt):
-                _adj.append(0)
+                _adj.append(int(i == j))
                 edge_id.append([m_cnt+i, m_cnt+j])
             
             adj.append(_adj)
@@ -313,36 +304,33 @@ class GraphAttentionLayer(nn.Module):
         self.e_features = e_features
         self.alpha = alpha
 
-        self.W_k = nn.Parameter(torch.zeros(size=(in_features, out_features, )))
-        nn.init.xavier_uniform_(self.W_k.data, gain=1.414)
-        self.W_qe = nn.Parameter(torch.zeros(size=(in_features + e_features, out_features, )))
-        nn.init.xavier_uniform_(self.W_qe.data, gain=1.414)
         self.W_q = nn.Parameter(torch.zeros(size=(in_features, out_features, )))
+        nn.init.xavier_uniform_(self.W_k.data, gain=1.414)
+        self.W_k = nn.Parameter(torch.zeros(size=(in_features + e_features, out_features, )))
+        nn.init.xavier_uniform_(self.W_qe.data, gain=1.414)
+        self.W_v = nn.Parameter(torch.zeros(size=(in_features + e_features, out_features, )))
         nn.init.xavier_uniform_(self.W_q.data, gain=1.414)
         self.a = nn.Parameter(torch.zeros(size=(2*out_features, 1)))
         nn.init.xavier_uniform_(self.a.data, gain=1.414)
         self.leakyrelu = nn.LeakyReLU(self.alpha)
     
     def forward(self, input, adj, e_feat):
-        hk = torch.mm(input, self.W_k)
-        N = hk.size()[0]
-        h_qe = torch.cat([input.repeat(N, 1), e_feat.view(N * N, -1)], dim=1)
-        h_qe = torch.matmul(h_qe, self.W_qe)
-        h_q = torch.mm(input, self.W_q).repeat(N, 1)
-        _adj = adj.unsqueeze(2).repeat(1, 1, self.out_features).view(N * N, -1)
-        #h_q = torch.where(_adj > 1, h_qe, h_q)
-        h_q = h_qe
+        hq = torch.mm(input, self.W_q)
+        N = hq.size()[0]
+        hk = torch.cat([input.repeat(N, 1), e_feat.view(N * N, -1)], dim=1)
+        hv = torch.matmul(hk, self.W_v)
+        hk = torch.matmul(hk, self.W_k)
 
-        a_input = torch.cat([hk.repeat(1, N).view(N * N, -1), h_q], dim=1).view(N, -1, 2 * self.out_features)
+        a_input = torch.cat([hq.repeat(1, N).view(N * N, -1), hk], dim=1).view(N, -1, 2 * self.out_features)
         e = self.leakyrelu(torch.matmul(a_input, self.a).squeeze(2))
 
         zero_vec = -9e15*torch.ones_like(e)
         
         att = torch.where(adj > 0, e, zero_vec)
         att = F.softmax(att, dim=1).unsqueeze(1)
-        #att = F.dropout(att, self.dropout, training=self.training)
-        h_q = h_q.view(N, N, -1)
-        h_prime = torch.stack([torch.matmul(att[i], h_q[i]) for i in range(N)], dim=0).squeeze(1)
-        h_prime = h_prime + hk
+        hv = hv.view(N, N, -1)
+        h_prime = torch.matmul(att, hv).squeeze(1)
+        #h_prime = torch.stack([torch.matmul(att[i], hv[i]) for i in range(N)], dim=0).squeeze(1)
+        #h_prime = h_prime + hq
 
         return h_prime
