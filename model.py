@@ -101,36 +101,32 @@ class DocREModel(nn.Module):
         ht_att = ht_att / (ht_att.sum(1, keepdim=True) + 1e-5)  # [node_num*node_num, c]
 
         n_node = m_cnt+d_cnt
-        e_features = []
+        e_features = None
         ht_att = ht_att.view(n_node, n_node, c)
         off = 0
         for i in range(d_cnt):
-            att = []
-            for p in range(m_sum[i]):
-                for q in range(m_sum[i]):
-                    att.append(ht_att[p+off, q+off])
-            att = torch.stack(att, dim=0)
+            le = torch.zeros(m_sum[i], off, self.config.hidden_size).to(attention)
+
+            att = ht_att[off:off+m_sum[i], off:off+m_sum[i]].reshape(m_sum[i] * m_sum[i], -1)
             ctx = contract("ld,rl->rd", sequence_output[i], att)
-            ctx = ctx.view(m_sum[i], m_sum[i], self.config.hidden_size)
-            for p in range(m_sum[i]):
-                for q in range(n_node):
-                    if q >= off and q < off+m_sum[i]:
-                        e_features.append(ctx[p, q-off])
-                    else:
-                        feat = torch.zeros(self.config.hidden_size).to(sequence_output.device)
-                        e_features.append(feat)
+            mide = ctx.view(m_sum[i], m_sum[i], self.config.hidden_size)
+
+            re = torch.zeros(m_sum[i], n_node-(off+m_sum[i]), self.config.hidden_size).to(attention)
+            _e = torch.cat([le, mide, re], dim=1)
+            if e_features == None:
+                e_features = _e
+            else:
+                e_features = torch.cat([e_features, _e], dim=0)
             off += m_sum[i]
-        for i in range(d_cnt):
-            for j in range(n_node):
-                feat = torch.zeros(self.config.hidden_size).to(sequence_output.device)
-                e_features.append(feat)
-        
-        
+        _e = torch.zeros(d_cnt, n_node, self.config.hidden_size).to(attention)
+        if e_features == None:
+            e_features = _e
+        else:
+            e_features = torch.cat([e_features, _e], dim=0)
         # return
         adj_ = torch.tensor(adj).to(sequence_output.device)
         node_features_ = torch.stack(node_features, dim=0)
-        e_features_ = torch.stack(e_features, dim=0).view(n_node, n_node, self.config.hidden_size)
-        return adj_, node_features_, e_features_
+        return adj_, node_features_, e_features
 
     def get_hrt(self, sequence_output, attention, entity_pos, hts):
         offset = 1 if self.config.transformer_type in ["bert", "roberta"] else 0
@@ -305,11 +301,11 @@ class GraphAttentionLayer(nn.Module):
         self.alpha = alpha
 
         self.W_q = nn.Parameter(torch.zeros(size=(in_features, out_features, )))
-        nn.init.xavier_uniform_(self.W_k.data, gain=1.414)
-        self.W_k = nn.Parameter(torch.zeros(size=(in_features + e_features, out_features, )))
-        nn.init.xavier_uniform_(self.W_qe.data, gain=1.414)
-        self.W_v = nn.Parameter(torch.zeros(size=(in_features + e_features, out_features, )))
         nn.init.xavier_uniform_(self.W_q.data, gain=1.414)
+        self.W_k = nn.Parameter(torch.zeros(size=(in_features + e_features, out_features, )))
+        nn.init.xavier_uniform_(self.W_k.data, gain=1.414)
+        self.W_v = nn.Parameter(torch.zeros(size=(in_features + e_features, out_features, )))
+        nn.init.xavier_uniform_(self.W_v.data, gain=1.414)
         self.a = nn.Parameter(torch.zeros(size=(2*out_features, 1)))
         nn.init.xavier_uniform_(self.a.data, gain=1.414)
         self.leakyrelu = nn.LeakyReLU(self.alpha)
@@ -330,7 +326,5 @@ class GraphAttentionLayer(nn.Module):
         att = F.softmax(att, dim=1).unsqueeze(1)
         hv = hv.view(N, N, -1)
         h_prime = torch.matmul(att, hv).squeeze(1)
-        #h_prime = torch.stack([torch.matmul(att[i], hv[i]) for i in range(N)], dim=0).squeeze(1)
-        #h_prime = h_prime + hq
 
         return h_prime

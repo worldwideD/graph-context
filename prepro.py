@@ -15,7 +15,7 @@ def chunks(l, n):
 
 def get_graph(entity_pos):
 	e_cnt, m_node = 0, []
-	for e in entity_pos[i]:
+	for e in entity_pos:
 		for start, end, sent_id in e:
 			m_node.append({'sent': sent_id, 'entity': e_cnt})
 		e_cnt += 1
