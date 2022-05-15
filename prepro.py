@@ -29,13 +29,20 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
         sent_map = []
 
         entities = sample['vertexSet']
-        entity_start, entity_end = [], []
+        entity_start, entity_end, mention_pos = [], [], []
+        m_cnt = 0
         for entity in entities:
+            st = m_cnt
             for mention in entity:
+                m_cnt += 1
                 sent_id = mention["sent_id"]
                 pos = mention["pos"]
                 entity_start.append((sent_id, pos[0],))
                 entity_end.append((sent_id, pos[1] - 1,))
+            if st == m_cnt:
+                # allocate an empty mention
+                m_cnt += 1
+            mention_pos.append([st, m_cnt])
         for i_s, sent in enumerate(sample['sents']):
             new_map = {}
             for i_t, token in enumerate(sent):
@@ -92,13 +99,29 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
         sents = sents[:max_seq_length - 2]
         input_ids = tokenizer.convert_tokens_to_ids(sents)
         input_ids = tokenizer.build_inputs_with_special_tokens(input_ids)
+        
+        htms, cut, mplabels = [], [], []
+        mps = 0
+        for i, ep in enumerate(hts):
+            h = ep[0]
+            t = ep[1]
+            st = mps
+            for p in range(mention_pos[h][0], mention_pos[h][1]):
+                for q in range(mention_pos[t][0], mention_pos[t][1]):
+                    htms.append([p, q])
+                    mplabels.append(relations[i])
+            mps += (mention_pos[h][1] - mention_pos[h][0]) * (mention_pos[t][1] - mention_pos[t][0])
+            cut.append(mps - st)
 
         i_line += 1
         feature = {'input_ids': input_ids,
                    'entity_pos': entity_pos,
                    'labels': relations,
                    'hts': hts,
+                   'htms': htms,
+                   'cut': cut,
                    'title': sample['title'],
+                   'mplabels': mplabels,
                    }
         features.append(feature)
 

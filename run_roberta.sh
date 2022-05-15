@@ -11,7 +11,7 @@ python train.py --data_dir ./dataset/docred \
 --learning_rate 3e-5 \
 --max_grad_norm 1.0 \
 --warmup_ratio 0.06 \
---num_train_epochs 100.0 \
+--num_train_epochs 30.0 \
 --seed 66 \
 --num_class 97 \
---save_path roberta_ver2.3_params.pkl
+--save_path roberta_params.pkl
