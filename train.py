@@ -40,7 +40,6 @@ def train(args, model, train_features, dev_features, test_features):
                           'hts': batch[4],
                           'htms': batch[5],
                           'cut': batch[6],
-                          'mplabels': batch[7],
                           }
                 outputs = model(**inputs)
                 loss = outputs[0] / args.gradient_accumulation_steps
@@ -101,7 +100,6 @@ def evaluate(args, model, features, tag="dev"):
                   'hts': batch[4],
                   'htms': batch[5],
                   'cut': batch[6],
-                  'mplabels': batch[7],
                   }
 
         with torch.no_grad():
@@ -135,7 +133,6 @@ def report(args, model, features):
                   'hts': batch[4],
                   'htms': batch[5],
                   'cut': batch[6],
-                  'mplabels': batch[7],
                   }
 
         with torch.no_grad():

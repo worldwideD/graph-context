@@ -100,7 +100,8 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
         input_ids = tokenizer.convert_tokens_to_ids(sents)
         input_ids = tokenizer.build_inputs_with_special_tokens(input_ids)
         
-        htms, cut, mplabels = [], [], []
+        htms, cut = [], []
+
         mps = 0
         for i, ep in enumerate(hts):
             h = ep[0]
@@ -109,9 +110,9 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
             for p in range(mention_pos[h][0], mention_pos[h][1]):
                 for q in range(mention_pos[t][0], mention_pos[t][1]):
                     htms.append([p, q])
-                    mplabels.append(relations[i])
             mps += (mention_pos[h][1] - mention_pos[h][0]) * (mention_pos[t][1] - mention_pos[t][0])
             cut.append(mps - st)
+
 
         i_line += 1
         feature = {'input_ids': input_ids,
@@ -121,13 +122,13 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
                    'htms': htms,
                    'cut': cut,
                    'title': sample['title'],
-                   'mplabels': mplabels,
                    }
         features.append(feature)
 
     print("# of documents {}.".format(i_line))
     print("# of positive examples {}.".format(pos_samples))
     print("# of negative examples {}.".format(neg_samples))
+
     return features
 
 

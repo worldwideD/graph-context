@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from opt_einsum import contract
 from long_seq import process_long_input
 from losses import ATLoss
@@ -15,7 +16,15 @@ class DocREModel(nn.Module):
 
         self.head_extractor = nn.Linear(2 * config.hidden_size, emb_size)
         self.tail_extractor = nn.Linear(2 * config.hidden_size, emb_size)
-        self.bilinear = nn.Linear(emb_size * block_size, config.num_labels)
+
+        self.rel = nn.Parameter(torch.zeros(size=(config.num_labels, 2 * emb_size, )))
+        nn.init.xavier_uniform_(self.rel.data)
+        self.bias = nn.Parameter(torch.zeros(size=(config.num_labels, )))
+        nn.init.zeros_(self.bias)
+        self.W = nn.Parameter(torch.zeros(size=(2 * emb_size, 2 * emb_size)))
+        nn.init.xavier_uniform_(self.W.data)
+
+        #self.bilinear = nn.Linear(emb_size * block_size, config.num_labels)
 
         self.emb_size = emb_size
         self.block_size = block_size
@@ -36,6 +45,7 @@ class DocREModel(nn.Module):
         offset = 1 if self.config.transformer_type in ["bert", "roberta"] else 0
         n, h, _, c = attention.size()
         hss, tss, rss, cuts = [], [], [], []
+        mx = max(cut)
         ## get mention pairs emb
         for i in range(len(entity_pos)):
             mention_embs, mention_atts = [], []
@@ -95,18 +105,28 @@ class DocREModel(nn.Module):
 
         hs = torch.tanh(self.head_extractor(torch.cat([hs, rs], dim=1)))
         ts = torch.tanh(self.tail_extractor(torch.cat([ts, rs], dim=1)))
+        '''
         b1 = hs.view(-1, self.emb_size // self.block_size, self.block_size)
         b2 = ts.view(-1, self.emb_size // self.block_size, self.block_size)
         bl = (b1.unsqueeze(3) * b2.unsqueeze(2)).view(-1, self.emb_size * self.block_size)
         logits = self.bilinear(bl)
+        '''
 
-        output, e_logits = self.loss_fnt.get_label(logits, num_labels=self.num_labels, cut=cuts)
-        output = (output, )
+        m_rep = torch.cat([hs, ts], dim=1)
+        m_rep = torch.split(m_rep, cuts, dim=0)
+        q = torch.matmul(self.rel, self.W)
+        def get_e_rep(m):
+            attn = torch.matmul(m, q.unsqueeze(2)).squeeze(2)
+            attn = F.softmax(attn, dim=-1)
+            e_rep = contract("ld,rl->rd", m.float(), attn)
+            return e_rep
+        e_rep = torch.stack(list(map(get_e_rep, m_rep))).to(sequence_output)
+        logits = torch.mul(e_rep, self.rel).sum(2) + self.bias
+
+        output = (self.loss_fnt.get_label(logits, num_labels=self.num_labels),)
         if labels is not None:
             labels = [torch.tensor(label) for label in labels]
             labels = torch.cat(labels, dim=0).to(logits)
-            mplabels = [torch.tensor(label) for label in mplabels]
-            mplabels = torch.cat(mplabels, dim=0).to(logits)
-            loss = self.loss_fnt(logits.float(), e_logits.float(), labels.float(), mplabels.float(), cut=cuts)
+            loss = self.loss_fnt(logits.float(), labels.float())
             output = (loss.to(sequence_output),) + output
         return output
