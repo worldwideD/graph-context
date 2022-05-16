@@ -23,6 +23,10 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
         return None
     with open(file_in, "r") as fh:
         data = json.load(fh)
+    
+    avg = 0.
+    cnt = 0
+    cnt10 = 0.
 
     for sample in tqdm(data, desc="Example"):
         sents = []
@@ -112,6 +116,10 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
                     htms.append([p, q])
             mps += (mention_pos[h][1] - mention_pos[h][0]) * (mention_pos[t][1] - mention_pos[t][0])
             cut.append(mps - st)
+            if mps-st <= 8:
+                cnt10 += 1
+        cnt += len(relations)
+        avg += mps
 
 
         i_line += 1
@@ -128,6 +136,10 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
     print("# of documents {}.".format(i_line))
     print("# of positive examples {}.".format(pos_samples))
     print("# of negative examples {}.".format(neg_samples))
+    avg = avg / cnt
+    cnt10 = cnt10 / cnt
+    print("# average of mps {}.".format(avg))
+    print("# mps less than or equal to 8 {}.".format(cnt10))
 
     return features
 

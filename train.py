@@ -13,7 +13,7 @@ import numpy as np
 import argparse
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 def train(args, model, train_features, dev_features, test_features):
@@ -193,6 +193,8 @@ def main():
                         help="random seed for initialization")
     parser.add_argument("--num_class", type=int, default=97,
                         help="Number of relation types in dataset.")
+    parser.add_argument("--num_pairs", type=int, default=8,
+                        help="Number of mention pairs in each entity pairs.")
 
     args = parser.parse_args()
     wandb.init(project="DocRED")
@@ -232,7 +234,7 @@ def main():
     config.transformer_type = args.transformer_type
 
     set_seed(args)
-    model = DocREModel(config, model, num_labels=args.num_labels)
+    model = DocREModel(config, model, num_labels=args.num_labels, num_pairs = args.num_pairs)
     model.to(0)
 
     if args.load_path == "":  # Training
