@@ -1,14 +1,13 @@
-from numpy import block
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from opt_einsum import contract
 from long_seq import process_long_input
 from losses import ATLoss
-
+import math
 
 class DocREModel(nn.Module):
-    def __init__(self, config, model, emb_size=768, block_size=64, num_labels=-1, num_pairs=8):
+    def __init__(self, config, model, emb_size=768, block_size=64, num_labels=-1, num_pairs=10):
         super().__init__()
         self.config = config
         self.model = model
@@ -20,12 +19,12 @@ class DocREModel(nn.Module):
         self.head_extractor = nn.Linear(2 * config.hidden_size, emb_size)
         self.tail_extractor = nn.Linear(2 * config.hidden_size, emb_size)
 
-        self.rel = nn.Parameter(torch.zeros(size=(config.num_labels, 2 * emb_size, )))
-        nn.init.xavier_uniform_(self.rel.data)
+        self.rel = nn.Parameter(torch.zeros(size=(config.num_labels, emb_size * block_size, )))
+        nn.init.kaiming_uniform_(self.rel.data, a=math.sqrt(5))
         self.bias = nn.Parameter(torch.zeros(size=(config.num_labels, )))
-        nn.init.zeros_(self.bias)
-        self.W = nn.Parameter(torch.zeros(size=(2 * emb_size, 2 * emb_size)))
-        nn.init.xavier_uniform_(self.W.data)
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.rel)
+        bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+        nn.init.uniform_(self.bias.data, -bound, bound)
 
         #self.bilinear = nn.Linear(emb_size * block_size, config.num_labels)
 
@@ -47,9 +46,9 @@ class DocREModel(nn.Module):
     def get_hrt(self, sequence_output, attention, entity_pos, htms, cut):
         offset = 1 if self.config.transformer_type in ["bert", "roberta"] else 0
         n, h, _, c = attention.size()
-        hss, tss, rss, cuts = [], [], [], []
-        msk = []
-        #mx = max([max(t) for t in cut])
+        hss, tss, rss = [], [], []
+        msk, seq2mat = [], []
+        seqcnt = 0
         ## get mention pairs emb
         for i in range(len(entity_pos)):
             mention_embs, mention_atts = [], []
@@ -74,17 +73,22 @@ class DocREModel(nn.Module):
             mention_atts = torch.stack(mention_atts, dim=0)
             
             ht_i = []
-            st = 0
+            mpcnt = 0
             for ct in cut[i]:
                 if ct <= self.num_pairs:
-                    ht_i = ht_i + htms[i][st: st+ct] + [[0, 0]] * (self.num_pairs - ct)
+                    ht_i = ht_i + htms[i][mpcnt: mpcnt + ct]
+                    seq2mat = seq2mat + [seqcnt + j for j in range(ct)] + [0 for k in range(self.num_pairs - ct)]
                     msk.append([1.] * ct + [0.] * (self.num_pairs - ct))
+                    seqcnt += ct
                 else:
-                    ht_i = ht_i + htms[i][st: st+self.num_pairs]
+                    ht_i = ht_i + htms[i][mpcnt: mpcnt + self.num_pairs]
+                    seq2mat = seq2mat + [seqcnt + j for j in range(self.num_pairs)]
                     msk.append([1.] * self.num_pairs)
-                st += ct
-            ht_i = torch.LongTensor(ht_i).to(sequence_output.device)
+                    seqcnt += self.num_pairs
+                mpcnt += ct
             
+
+            ht_i = torch.LongTensor(ht_i).to(sequence_output.device)
             #ht_i = torch.LongTensor(htms[i]).to(sequence_output.device)
             hs = torch.index_select(mention_embs, 0, ht_i[:, 0])
             ts = torch.index_select(mention_embs, 0, ht_i[:, 1])
@@ -97,12 +101,11 @@ class DocREModel(nn.Module):
             hss.append(hs)
             tss.append(ts)
             rss.append(rs)
-            cuts = cuts + cut[i]
         hss = torch.cat(hss, dim=0)
         tss = torch.cat(tss, dim=0)
         rss = torch.cat(rss, dim=0)
         msk = torch.Tensor(msk).to(sequence_output)
-        return hss, rss, tss, msk
+        return hss, rss, tss, msk, seq2mat
 
 
     def forward(self,
@@ -117,39 +120,26 @@ class DocREModel(nn.Module):
                 ):
 
         sequence_output, attention = self.encode(input_ids, attention_mask)
-        hs, rs, ts, mask = self.get_hrt(sequence_output, attention, entity_pos, htms, cut)
-        #mx = max([max(t) for t in cut])
+        hs, rs, ts, mask, seq2mat = self.get_hrt(sequence_output, attention, entity_pos, htms, cut)
 
         hs = torch.tanh(self.head_extractor(torch.cat([hs, rs], dim=1)))
         ts = torch.tanh(self.tail_extractor(torch.cat([ts, rs], dim=1)))
-        '''
+        
         b1 = hs.view(-1, self.emb_size // self.block_size, self.block_size)
         b2 = ts.view(-1, self.emb_size // self.block_size, self.block_size)
-        bl = (b1.unsqueeze(3) * b2.unsqueeze(2)).view(-1, self.emb_size * self.block_size)
-        logits = self.bilinear(bl)
-        '''
-        '''
-        m_rep = torch.cat([hs, ts], dim=1)
-        m_rep = torch.split(m_rep, cuts, dim=0)
-        q = torch.matmul(self.rel, self.W)
-        def get_e_rep(m):
-            attn = torch.matmul(m, q.unsqueeze(2)).squeeze(2)
-            attn = F.softmax(attn, dim=-1)
-            e_rep = contract("ld,rl->rd", m.float(), attn)
-            return e_rep
-        e_rep = torch.stack(list(map(get_e_rep, m_rep))).to(sequence_output)
-        logits = torch.mul(e_rep, self.rel).sum(2) + self.bias
-        '''
-        
-        m_rep = torch.cat([hs, ts], dim=1)
-        q = torch.matmul(self.rel, self.W)
-        attn = torch.matmul(m_rep, q.unsqueeze(2)).view(self.config.num_labels, -1, self.num_pairs).float()
+        m_rep = (b1.unsqueeze(3) * b2.unsqueeze(2)).view(-1, self.emb_size * self.block_size)
+        #logits = self.bilinear(bl)
+
+        seq2mat = torch.LongTensor(seq2mat).to(sequence_output.device)
+        attn = torch.matmul(m_rep, self.rel.unsqueeze(2)).squeeze(2)
+        attn = torch.index_select(attn, 1, seq2mat).view(self.config.num_labels, -1, self.num_pairs)
+        attn = attn.float()
         attn = attn - (1 - mask) * 1e30
         attn = F.softmax(attn, dim=-1)
-        m_rep = m_rep.view(-1, self.num_pairs, 2 * self.emb_size)
-        e_rep = torch.matmul(attn.unsqueeze(2), m_rep.unsqueeze(0)).squeeze(2).permute(1, 0, 2)
 
-        logits = torch.mul(e_rep, self.rel).sum(2) + self.bias
+        m_logits = torch.matmul(m_rep, self.rel.permute(1, 0))
+        m_logits = torch.index_select(m_logits, 0, seq2mat).view(-1, self.num_pairs, self.config.num_labels)
+        logits = torch.mul(m_logits, attn.permute(1, 2, 0)).sum(1) + self.bias
         
         output = (self.loss_fnt.get_label(logits, num_labels=self.num_labels),)
         if labels is not None:

@@ -13,7 +13,7 @@ import numpy as np
 import argparse
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
 def train(args, model, train_features, dev_features, test_features):
@@ -193,7 +193,7 @@ def main():
                         help="random seed for initialization")
     parser.add_argument("--num_class", type=int, default=97,
                         help="Number of relation types in dataset.")
-    parser.add_argument("--num_pairs", type=int, default=8,
+    parser.add_argument("--num_pairs", type=int, default=10,
                         help="Number of mention pairs in each entity pairs.")
 
     args = parser.parse_args()
