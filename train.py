@@ -1,3 +1,8 @@
+import argparse
+import os
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 import wandb
 from evaluation import to_official, official_evaluate
 from prepro import read_docred
@@ -10,10 +15,7 @@ import ujson as json
 from apex import amp
 import torch
 import numpy as np
-import argparse
-import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
 def train(args, model, train_features, dev_features, test_features):
@@ -113,10 +115,20 @@ def evaluate(args, model, features, tag="dev"):
     preds = np.concatenate(preds, axis=0).astype(np.float32)
     ans = to_official(preds, features)
     if len(ans) > 0:
-        best_f1, _, best_f1_ign, _ = official_evaluate(ans, args.data_dir)
+        best_f1, _, best_f1_ign, _, f1_1, f1_2, f1_3, f1_4, f1_5, f1_ign_1, f1_ign_2, f1_ign_3, f1_ign_4, f1_ign_5 = official_evaluate(ans, args.data_dir)
     output = {
         tag + "_F1": best_f1 * 100,
         tag + "_F1_ign": best_f1_ign * 100,
+        tag + "_F1_mp=1": f1_1 * 100,
+        tag + "_F1_ign_mp=1": f1_ign_1 * 100,
+        tag + "_F1_mp=2": f1_2 * 100,
+        tag + "_F1_ign_mp=2": f1_ign_2 * 100,
+        tag + "_F1_mp=3": f1_3 * 100,
+        tag + "_F1_ign_mp=3": f1_ign_3 * 100,
+        tag + "_F1_mp=4": f1_4 * 100,
+        tag + "_F1_ign_mp=4": f1_ign_4 * 100,
+        tag + "_F1_mp>=5": f1_5 * 100,
+        tag + "_F1_ign_mp>=5": f1_ign_5 * 100,
     }
     return best_f1, output
 
