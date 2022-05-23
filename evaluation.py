@@ -82,17 +82,9 @@ def official_evaluate(tmp, path):
 
     title2vectexSet = {}
 
-    correct_re_1 = 0
-    answer_1 = 0
-    fact_1 = 0
-
-    correct_re_2_4 = 0
-    answer_2_4 = 0
-    fact_2_4 = 0
-
-    correct_re_5 = 0
-    answer_5 = 0
-    fact_5 = 0
+    correct_re_ = [0, 0, 0, 0, 0]
+    answer_ = [0, 0, 0, 0, 0]
+    fact_ = [0, 0, 0, 0, 0]
 
     for x in truth:
         title = x['title']
@@ -109,11 +101,15 @@ def official_evaluate(tmp, path):
             tot_evidences += len(label['evidence'])
             mention_pairs_cnt = len(vertexSet[h_idx]) * len(vertexSet[t_idx])
             if mention_pairs_cnt == 1:
-                fact_1 += 1
-            elif mention_pairs_cnt <= 4:
-                fact_2_4 += 1
+                fact_[0] += 1
+            elif mention_pairs_cnt == 2:
+                fact_[1] += 1
+            elif mention_pairs_cnt == 3:
+                fact_[2] += 1
+            elif mention_pairs_cnt == 4:
+                fact_[3] += 1
             else:
-                fact_5 += 1
+                fact_[4] += 1
 
     tot_relations = len(std)
     tmp.sort(key=lambda x: (x['title'], x['h_idx'], x['t_idx'], x['r']))
@@ -132,9 +128,7 @@ def official_evaluate(tmp, path):
     correct_in_train_annotated = 0
     correct_in_train_distant = 0
 
-    correct_in_train_annotated_1 = 0
-    correct_in_train_annotated_2_4 = 0
-    correct_in_train_annotated_5 = 0
+    correct_in_train_annotated_ = [0, 0, 0, 0, 0]
     titleset2 = set([])
     for x in submission_answer:
         title = x['title']
@@ -154,21 +148,29 @@ def official_evaluate(tmp, path):
 
         mention_pairs_cnt = len(vertexSet[h_idx]) * len(vertexSet[t_idx])
         if mention_pairs_cnt == 1:
-            answer_1 += 1
-        elif mention_pairs_cnt <= 4:
-            answer_2_4 += 1
+            answer_[0] += 1
+        elif mention_pairs_cnt == 2:
+            answer_[1] += 1
+        elif mention_pairs_cnt == 3:
+            answer_[2] += 1
+        elif mention_pairs_cnt == 4:
+            answer_[3] += 1
         else:
-            answer_5 += 1
+            answer_[4] += 1
 
         if (title, r, h_idx, t_idx) in std:
             correct_re += 1
 
             if mention_pairs_cnt == 1:
-                correct_re_1 += 1
-            elif mention_pairs_cnt <= 4:
-                correct_re_2_4 += 1
+                correct_re_[0] += 1
+            elif mention_pairs_cnt == 2:
+                correct_re_[1] += 1
+            elif mention_pairs_cnt == 3:
+                correct_re_[2] += 1
+            elif mention_pairs_cnt == 4:
+                correct_re_[3] += 1
             else:
-                correct_re_5 += 1
+                correct_re_[4] += 1
 
             stdevi = std[(title, r, h_idx, t_idx)]
             correct_evidence += len(stdevi & evi)
@@ -183,11 +185,15 @@ def official_evaluate(tmp, path):
             if in_train_annotated:
                 correct_in_train_annotated += 1
                 if mention_pairs_cnt == 1:
-                    correct_in_train_annotated_1 += 1
-                elif mention_pairs_cnt <= 4:
-                    correct_in_train_annotated_2_4 += 1
+                    correct_in_train_annotated_[0] += 1
+                elif mention_pairs_cnt == 2:
+                    correct_in_train_annotated_[1] += 1
+                elif mention_pairs_cnt == 3:
+                    correct_in_train_annotated_[2] += 1
+                elif mention_pairs_cnt == 4:
+                    correct_in_train_annotated_[3] += 1
                 else:
-                    correct_in_train_annotated_5 += 1
+                    correct_in_train_annotated_[4] += 1
 
             if in_train_distant:
                 correct_in_train_distant += 1
@@ -200,26 +206,14 @@ def official_evaluate(tmp, path):
         re_f1 = 2.0 * re_p * re_r / (re_p + re_r)
 
     # calculate   f1 for different mentions pairs cnt
-    re_1_p = 1.0 * correct_re_1 / answer_1
-    re_1_r = 1.0 * correct_re_1 / fact_1
-    if re_1_p + re_1_r == 0:
-        re_1_f1 = 0
-    else:
-        re_1_f1 = 2.0 * re_1_p * re_1_r / (re_1_p + re_1_r)
-
-    re_2_4_p = 1.0 * correct_re_2_4 / answer_2_4
-    re_2_4_r = 1.0 * correct_re_2_4 / fact_2_4
-    if re_2_4_p + re_2_4_r == 0:
-        re_2_4_f1 = 0
-    else:
-        re_2_4_f1 = 2.0 * re_2_4_p * re_2_4_r / (re_2_4_p + re_2_4_r)
-
-    re_5_p = 1.0 * correct_re_5 / answer_5
-    re_5_r = 1.0 * correct_re_5 / fact_5
-    if re_5_p + re_5_r == 0:
-        re_5_f1 = 0
-    else:
-        re_5_f1 = 2.0 * re_5_p * re_5_r / (re_5_p + re_5_r)
+    re_f1_ = []
+    for i in range(5):
+        p = 1.0 * correct_re_[i] / answer_[i]
+        r = 1.0 * correct_re_[i] / fact_[i]
+        if p + r == 0:
+            re_f1_.append(0.)
+        else:
+            re_f1_.append(2.0 * p * r / (p + r))
 
     evi_p = 1.0 * correct_evidence / pred_evi if pred_evi > 0 else 0
     evi_r = 1.0 * correct_evidence / tot_evidences
@@ -237,27 +231,18 @@ def official_evaluate(tmp, path):
         re_f1_ignore_train_annotated = 2.0 * re_p_ignore_train_annotated * re_r / (re_p_ignore_train_annotated + re_r)
 
     # calculate  ign_f1 for different mentions pairs cnt
-    re_p_ignore_train_annotated_1 = 1.0 * (correct_re_1 - correct_in_train_annotated_1) / (answer_1 - correct_in_train_annotated_1 + 1e-5)
-    if re_p_ignore_train_annotated_1 + re_1_r == 0:
-        re_f1_ignore_train_annotated_1 = 0
-    else:
-        re_f1_ignore_train_annotated_1 = 2.0 * re_p_ignore_train_annotated_1 * re_1_r / (re_p_ignore_train_annotated_1 + re_1_r)
-
-    re_p_ignore_train_annotated_2_4 = 1.0 * (correct_re_2_4 - correct_in_train_annotated_2_4) / (answer_2_4 - correct_in_train_annotated_2_4 + 1e-5)
-    if re_p_ignore_train_annotated_2_4 + re_2_4_r == 0:
-        re_f1_ignore_train_annotated_2_4 = 0
-    else:
-        re_f1_ignore_train_annotated_2_4 = 2.0 * re_p_ignore_train_annotated_2_4 * re_2_4_r / (re_p_ignore_train_annotated_2_4 + re_2_4_r)
-
-    re_p_ignore_train_annotated_5 = 1.0 * (correct_re_5 - correct_in_train_annotated_5) / (answer_5 - correct_in_train_annotated_5 + 1e-5)
-    if re_p_ignore_train_annotated_5 + re_1_r == 0:
-        re_f1_ignore_train_annotated_5 = 0
-    else:
-        re_f1_ignore_train_annotated_5 = 2.0 * re_p_ignore_train_annotated_5 * re_5_r / (re_p_ignore_train_annotated_5 + re_5_r)
+    re_f1_ignore_train_annotated_ = []
+    for i in range(5):
+        p = 1.0 * (correct_re_[i] - correct_in_train_annotated_[i]) / (answer_[i] - correct_in_train_annotated_[i] + 1e-5)
+        r = 1.0 * correct_re_[i] / fact_[i]
+        if p + r == 0:
+            re_f1_ignore_train_annotated_.append(0.)
+        else:
+            re_f1_ignore_train_annotated_.append(2.0 * p * r / (p + r))
 
     if re_p_ignore_train + re_r == 0:
         re_f1_ignore_train = 0
     else:
         re_f1_ignore_train = 2.0 * re_p_ignore_train * re_r / (re_p_ignore_train + re_r)
 
-    return re_f1, evi_f1, re_f1_ignore_train_annotated, re_f1_ignore_train, re_1_f1, re_2_4_f1, re_5_f1, re_f1_ignore_train_annotated_1, re_f1_ignore_train_annotated_2_4, re_f1_ignore_train_annotated_5
+    return re_f1, evi_f1, re_f1_ignore_train_annotated, re_f1_ignore_train, re_f1_[0], re_f1_[1], re_f1_[2], re_f1_[3], re_f1_[4], re_f1_ignore_train_annotated_[0], re_f1_ignore_train_annotated_[1], re_f1_ignore_train_annotated_[2], re_f1_ignore_train_annotated_[3], re_f1_ignore_train_annotated_[4]

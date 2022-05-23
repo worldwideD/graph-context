@@ -111,14 +111,18 @@ def evaluate(args, model, features, tag="dev"):
     preds = np.concatenate(preds, axis=0).astype(np.float32)
     ans = to_official(preds, features)
     if len(ans) > 0:
-        best_f1, _, best_f1_ign, _, f1_1, f1_2_4, f1_5, f1_ign_1, f1_ign_2_4, f1_ign_5 = official_evaluate(ans, args.data_dir)
+        best_f1, _, best_f1_ign, _, f1_1, f1_2, f1_3, f1_4, f1_5, f1_ign_1, f1_ign_2, f1_ign_3, f1_ign_4, f1_ign_5 = official_evaluate(ans, args.data_dir)
     output = {
         tag + "_F1": best_f1 * 100,
         tag + "_F1_ign": best_f1_ign * 100,
         tag + "_F1_mp=1": f1_1 * 100,
         tag + "_F1_ign_mp=1": f1_ign_1 * 100,
-        tag + "_F1_2<=mp<=4": f1_2_4 * 100,
-        tag + "_F1_ign_2<=mp<=4": f1_ign_2_4 * 100,
+        tag + "_F1_mp=2": f1_2 * 100,
+        tag + "_F1_ign_mp=2": f1_ign_2 * 100,
+        tag + "_F1_mp=3": f1_3 * 100,
+        tag + "_F1_ign_mp=3": f1_ign_3 * 100,
+        tag + "_F1_mp=4": f1_4 * 100,
+        tag + "_F1_ign_mp=4": f1_ign_4 * 100,
         tag + "_F1_mp>=5": f1_5 * 100,
         tag + "_F1_ign_mp>=5": f1_ign_5 * 100,
     }

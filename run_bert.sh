@@ -12,6 +12,6 @@ python train.py --data_dir ./dataset/docred \
 --max_grad_norm 1.0 \
 --warmup_ratio 0.06 \
 --num_train_epochs 30.0 \
---seed 99 \
+--seed 88 \
 --num_class 97 \
 --save_path loss_ver3.1_params.pkl
