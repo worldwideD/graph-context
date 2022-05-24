@@ -6,6 +6,34 @@ from long_seq import process_long_input
 from losses import ATLoss
 import math
 
+class attn(nn.Module):
+    def __init__(self, config, in_features, out_features, num_pairs):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.num_pairs = num_pairs
+        self.config = config
+
+        self.rel = nn.Parameter(torch.zeros(size=(out_features, in_features, )))
+        nn.init.kaiming_uniform_(self.rel.data, a=math.sqrt(5))
+        self.bias = nn.Parameter(torch.zeros(size=(out_features, )))
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.rel)
+        bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+        nn.init.uniform_(self.bias.data, -bound, bound)
+    
+    def forward(self, m_rep, seq2mat, mask):
+        attn = torch.matmul(m_rep, self.rel.unsqueeze(2)).squeeze(2)
+        attn = torch.index_select(attn, 1, seq2mat).view(self.out_features, -1, self.num_pairs)
+        attn = attn.float()
+        attn = attn - (1 - mask) * 1e30
+        attn = F.softmax(attn, dim=-1)
+
+        m_logits = torch.matmul(m_rep, self.rel.permute(1, 0))
+        m_logits = torch.index_select(m_logits, 0, seq2mat).view(-1, self.num_pairs, self.config.num_labels)
+        logits = torch.mul(m_logits, attn.permute(1, 2, 0)).sum(1) + self.bias
+        return logits
+
+
 class DocREModel(nn.Module):
     def __init__(self, config, model, emb_size=768, block_size=64, num_labels=-1, num_pairs=10):
         super().__init__()
@@ -19,12 +47,7 @@ class DocREModel(nn.Module):
         self.head_extractor = nn.Linear(2 * config.hidden_size, emb_size)
         self.tail_extractor = nn.Linear(2 * config.hidden_size, emb_size)
 
-        self.rel = nn.Parameter(torch.zeros(size=(config.num_labels, emb_size * block_size, )))
-        nn.init.kaiming_uniform_(self.rel.data, a=math.sqrt(5))
-        self.bias = nn.Parameter(torch.zeros(size=(config.num_labels, )))
-        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.rel)
-        bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-        nn.init.uniform_(self.bias.data, -bound, bound)
+        self.bilinear = attn(config, emb_size * block_size, config.num_labels, num_pairs)
 
         #self.bilinear = nn.Linear(emb_size * block_size, config.num_labels)
 
@@ -51,11 +74,11 @@ class DocREModel(nn.Module):
         seqcnt = 0
         ## get mention pairs emb
         for i in range(len(entity_pos)):
-            mention_embs, mention_atts = [], []
+            mention_embs, mention_atts, mention_sent = [], [], []
             m_cnt = 0
             for e in entity_pos[i]:
                 st = m_cnt
-                for start, end in e:
+                for start, end, in e:
                     if start + offset < c:
                         mention_embs.append(sequence_output[i, start + offset])
                         mention_atts.append(attention[i, :, start + offset])
@@ -71,6 +94,7 @@ class DocREModel(nn.Module):
 
             mention_embs = torch.stack(mention_embs, dim=0)
             mention_atts = torch.stack(mention_atts, dim=0)
+            mention_sent = torch.LongTensor(mention_sent).to(sequence_output.device)
             
             ht_i = []
             mpcnt = 0
@@ -98,6 +122,7 @@ class DocREModel(nn.Module):
             ht_att = (h_att * t_att).mean(1)
             ht_att = ht_att / (ht_att.sum(1, keepdim=True) + 1e-5)
             rs = contract("ld,rl->rd", sequence_output[i], ht_att)
+
             hss.append(hs)
             tss.append(ts)
             rss.append(rs)
@@ -129,8 +154,9 @@ class DocREModel(nn.Module):
         b2 = ts.view(-1, self.emb_size // self.block_size, self.block_size)
         m_rep = (b1.unsqueeze(3) * b2.unsqueeze(2)).view(-1, self.emb_size * self.block_size)
         #logits = self.bilinear(bl)
-
+        
         seq2mat = torch.LongTensor(seq2mat).to(sequence_output.device)
+        '''
         attn = torch.matmul(m_rep, self.rel.unsqueeze(2)).squeeze(2)
         attn = torch.index_select(attn, 1, seq2mat).view(self.config.num_labels, -1, self.num_pairs)
         attn = attn.float()
@@ -140,7 +166,9 @@ class DocREModel(nn.Module):
         m_logits = torch.matmul(m_rep, self.rel.permute(1, 0))
         m_logits = torch.index_select(m_logits, 0, seq2mat).view(-1, self.num_pairs, self.config.num_labels)
         logits = torch.mul(m_logits, attn.permute(1, 2, 0)).sum(1) + self.bias
-        
+        '''
+
+        logits = self.bilinear(m_rep, seq2mat, mask)
         output = (self.loss_fnt.get_label(logits, num_labels=self.num_labels),)
         if labels is not None:
             labels = [torch.tensor(label) for label in labels]

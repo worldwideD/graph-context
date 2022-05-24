@@ -8,7 +8,7 @@ python train.py --data_dir ./dataset/docred \
 --test_batch_size 8 \
 --gradient_accumulation_steps 1 \
 --num_labels 4 \
---learning_rate 5e-5 \
+--learning_rate 2e-5 \
 --max_grad_norm 1.0 \
 --warmup_ratio 0.06 \
 --num_train_epochs 30.0 \
