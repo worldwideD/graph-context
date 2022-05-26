@@ -20,6 +20,7 @@ class attn(nn.Module):
         fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.rel)
         bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
         nn.init.uniform_(self.bias.data, -bound, bound)
+        self.dropout = nn.Dropout(p=0.5)
     
     def forward(self, m_rep, seq2mat, mask):
         attn = torch.matmul(m_rep, self.rel.unsqueeze(2)).squeeze(2)
@@ -28,6 +29,7 @@ class attn(nn.Module):
         attn = attn - (1 - mask) * 1e30
         attn = F.softmax(attn, dim=-1)
 
+        m_rep = self.dropout(m_rep)
         m_logits = torch.matmul(m_rep, self.rel.permute(1, 0))
         m_logits = torch.index_select(m_logits, 0, seq2mat).view(-1, self.num_pairs, self.config.num_labels)
         logits = torch.mul(m_logits, attn.permute(1, 2, 0)).sum(1) + self.bias

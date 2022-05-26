@@ -26,8 +26,11 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
     
     avg = 0.
     cnt = 0
-    cnt10 = 0.
+    cnt2 = 0.
     cnt1  = 0.
+    cnt3 = 0.
+    cnt4 = 0.
+    cnt5 = 0.
 
     for sample in tqdm(data, desc="Example"):
         sents = []
@@ -117,10 +120,16 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
                     htms.append([p, q])
             mps += (mention_pos[h][1] - mention_pos[h][0]) * (mention_pos[t][1] - mention_pos[t][0])
             cut.append(mps - st)
-            if mps-st <= 10:
-                cnt10 += 1
             if mps-st == 1:
                 cnt1 += 1
+            if mps-st == 2:
+                cnt2 += 1
+            if mps-st == 3:
+                cnt3 += 1
+            if mps-st == 4:
+                cnt4 += 1
+            if mps-st >= 5:
+                cnt5 += 1
         cnt += len(relations)
         avg += mps
 
@@ -140,11 +149,17 @@ def read_docred(file_in, tokenizer, max_seq_length=1024):
     print("# of positive examples {}.".format(pos_samples))
     print("# of negative examples {}.".format(neg_samples))
     avg = avg / cnt
-    cnt10 = cnt10 / cnt
     cnt1 = cnt1 / cnt
+    cnt2 = cnt2 / cnt
+    cnt3 = cnt3 / cnt
+    cnt4 = cnt4 / cnt
+    cnt5 = cnt5 / cnt
     print("# average of mps {}.".format(avg))
-    print("# mps less than or equal to 10 {}.".format(cnt10))
     print("# mps equal to 1 {}.".format(cnt1))
+    print("# mps equal to 2 {}.".format(cnt2))
+    print("# mps equal to 3 {}.".format(cnt3))
+    print("# mps equal to 4 {}.".format(cnt4))
+    print("# mps >= 5 {}.".format(cnt5))
 
     return features
 
